@@ -1,0 +1,67 @@
+services: {}
+#  cassandra:
+#    image: 'docker.m.daocloud.io/cassandra:latest'
+#    environment:
+#      - 'CASSANDRA_DC=dc1'
+#      - 'CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch'
+#    ports:
+#      - '9042'
+#  chroma:
+#    image: 'docker.m.daocloud.io/chromadb/chroma:latest'
+#    ports:
+#      - '8000'
+#  elasticsearch:
+#    image: 'docker.elastic.co/elasticsearch/elasticsearch:9.3.3'
+#    environment:
+#      - 'ELASTIC_PASSWORD=secret'
+#      - 'discovery.type=single-node'
+#      - 'xpack.security.enabled=false'
+#    ports:
+#      - '9200'
+#      - '9300'
+#  mongodb:
+#    image: 'docker.m.daocloud.io/mongo:latest'
+#    environment:
+#      - 'MONGO_INITDB_DATABASE=mydatabase'
+#      - 'MONGO_INITDB_ROOT_PASSWORD=secret'
+#      - 'MONGO_INITDB_ROOT_USERNAME=root'
+#    ports:
+#      - '27017'
+#  mysql:
+#    image: 'docker.m.daocloud.io/mysql:latest'
+#    environment:
+#      - 'MYSQL_DATABASE=mydatabase'
+#      - 'MYSQL_PASSWORD=secret'
+#      - 'MYSQL_ROOT_PASSWORD=verysecret'
+#      - 'MYSQL_USER=myuser'
+#    ports:
+#      - '3306'
+#  neo4j:
+#    image: 'docker.m.daocloud.io/neo4j:latest'
+#    environment:
+#      - 'NEO4J_AUTH=neo4j/notverysecret'
+#    ports:
+#      - '7687'
+#  ollama:
+#    image: 'docker.m.daocloud.io/ollama/ollama:latest'
+#    ports:
+#      - '11434'
+#  postgres:
+#    image: 'docker.m.daocloud.io/postgres:latest'
+#    environment:
+#      - 'POSTGRES_DB=mydatabase'
+#      - 'POSTGRES_PASSWORD=secret'
+#      - 'POSTGRES_USER=myuser'
+#    ports:
+#      - '5432'
+#  rabbitmq:
+#    image: 'docker.m.daocloud.io/rabbitmq:latest'
+#    environment:
+#      - 'RABBITMQ_DEFAULT_PASS=secret'
+#      - 'RABBITMQ_DEFAULT_USER=myuser'
+#    ports:
+#      - '5672'
+#  redis:
+#    image: 'docker.m.daocloud.io/redis:latest'
+#    ports:
+#      - '6379'

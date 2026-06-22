@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>智能答疑 Agent</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="app">
+  <aside class="sidebar">
+    <div class="brand">智能答疑 Agent</div>
+    <div style="margin-bottom:12px;"><a class="link" href="/knowledge.html" style="font-size:13px;">📚 知识库管理</a></div>
+    <div class="session-row">
+      <input id="sessionId" value="s1" autocomplete="off">
+      <button id="newSession">新会话</button>
+    </div>
+    <section>
+      <h2>会话</h2>
+      <div id="sessions" class="list muted">暂无会话</div>
+    </section>
+    <section>
+      <h2>记忆关系</h2>
+      <div id="memoryStats" class="stats"></div>
+      <div id="memoryGraph" class="graph"></div>
+    </section>
+  </aside>
+
+  <section class="chat">
+    <header>
+      <div>
+        <h1>基础平台智能答疑</h1>
+        <p>多轮对话、槽位记忆、领域路由、RAG、工具调用、证据合成</p>
+      </div>
+      <a class="link" href="/api/agent/tools" target="_blank">查看工具</a>
+    </header>
+
+    <div id="messages" class="messages"></div>
+
+    <form id="chatForm" class="composer">
+      <textarea id="message" rows="3" placeholder="例如：这个支付失败了，帮我看下"></textarea>
+      <button type="submit">发送</button>
+    </form>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

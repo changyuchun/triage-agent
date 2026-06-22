@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知识库管理 - 智能答疑 Agent</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .kb-main { max-width: 960px; margin: 0 auto; padding: 24px; }
+    .kb-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    .kb-header h1 { font-size: 22px; }
+    .kb-header p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+    .kb-section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+    .kb-section h2 { font-size: 16px; margin-bottom: 14px; color: var(--text); }
+    .upload-form { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: end; }
+    .upload-form .field { display: flex; flex-direction: column; gap: 4px; }
+    .upload-form label { font-size: 12px; color: var(--muted); }
+    .upload-form select, .upload-form input[type="file"] {
+      border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; background: white;
+    }
+    .doc-list { display: grid; gap: 8px; }
+    .doc-item { display: flex; justify-content: space-between; align-items: center; padding: 12px;
+      border: 1px solid var(--line); border-radius: 8px; background: #fafbfc; }
+    .doc-item .info { font-size: 13px; }
+    .doc-item .info strong { color: var(--accent); }
+    .doc-item .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .btn-del { background: #dc3545; font-size: 12px; padding: 6px 10px; }
+    .search-form { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; margin-bottom: 14px; }
+    .search-results { display: grid; gap: 10px; }
+    .result-item { padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: #fafbfc; }
+    .result-item .title { font-weight: 600; color: var(--accent); margin-bottom: 4px; }
+    .result-item .content { font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: var(--text); }
+    .result-item .score-bar { display: flex; gap: 8px; margin-top: 6px; }
+    .result-item .score { font-size: 12px; color: var(--muted); }
+    .toast { position: fixed; top: 20px; right: 20px; padding: 12px 18px; border-radius: 8px;
+      background: var(--accent); color: white; font-size: 14px; display: none; z-index: 999; }
+    .toast.error { background: #dc3545; }
+    .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+    .text-upload { margin-top: 12px; }
+    .text-upload textarea { width: 100%; min-height: 100px; border: 1px solid var(--line); border-radius: 8px;
+      padding: 10px; font-size: 13px; font-family: monospace; resize: vertical; }
+    .text-upload .actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+    .text-upload input[type="text"] { flex: 1; }
+    .status-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+    .status-badge { padding: 4px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+    .status-badge.ok { background: #d4edda; color: #155724; }
+    .status-badge.warn { background: #fff3cd; color: #856404; }
+    .pipeline-diagram { font-size: 12px; color: var(--muted); margin-top: 8px; padding: 8px 12px;
+      background: #f8f9fa; border-radius: 6px; border-left: 3px solid var(--accent); }
+    .format-hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .upload-progress { display: none; margin-top: 8px; }
+    .upload-progress .bar { height: 4px; background: var(--accent); border-radius: 2px; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  </style>
+</head>
+<body>
+<div class="kb-main">
+  <div class="kb-header">
+    <div>
+      <h1>知识库管理</h1>
+      <p>上传文档 → 分块（TokenTextSplitter）→ Embedding（bge-m3）→ VectorStore（Redis）→ 混合检索（BM25 + 向量 + RRF）</p>
+    </div>
+    <a class="link" href="/">← 返回对话</a>
+  </div>
+
+  <!-- 系统状态 -->
+  <div class="kb-section">
+    <h2>⚙️ 系统状态</h2>
+    <div class="status-bar" id="statusBar">
+      <span class="status-badge warn">加载中...</span>
+    </div>
+    <div class="pipeline-diagram" id="pipelineInfo">
+      RAG 管道：文档上传 → TokenTextSplitter（800 token/块）→ BAAI/bge-m3 Embedding → Redis VectorStore → BM25 + 向量混合召回 → RRF 融合排序
+    </div>
+  </div>
+
+  <!-- 文档上传 -->
+  <div class="kb-section">
+    <h2>📄 上传文档</h2>
+    <form class="upload-form" id="uploadForm">
+      <div class="field">
+        <label>选择文件（支持 .txt / .md / .pdf）</label>
+        <input type="file" id="fileInput" accept=".txt,.md,.text,.markdown,.pdf" required>
+        <div class="format-hint">PDF 文件将使用 Apache PDFBox 提取文本后分块索引</div>
+      </div>
+      <div class="field">
+        <label>领域</label>
+        <select id="domainSelect">
+          <option value="general">通用</option>
+          <option value="payment">支付域</option>
+          <option value="trade">交易域</option>
+          <option value="marketing">营销域</option>
+        </select>
+      </div>
+      <button type="submit">上传索引</button>
+    </form>
+    <div class="upload-progress" id="uploadProgress">
+      <div class="bar"></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px">正在分块和向量化，请稍候...</div>
+    </div>
+
+    <div class="text-upload">
+      <label style="font-size:12px;color:var(--muted);">或直接粘贴文本内容：</label>
+      <textarea id="textContent" placeholder="在此粘贴知识文档内容..."></textarea>
+      <div class="actions">
+        <input type="text" id="textFilename" placeholder="文档名称（如：支付SOP）">
+        <select id="textDomain" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;">
+          <option value="general">通用</option>
+          <option value="payment">支付域</option>
+          <option value="trade">交易域</option>
+          <option value="marketing">营销域</option>
+        </select>
+        <button onclick="uploadText()">提交索引</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 已索引文档列表 -->
+  <div class="kb-section">
+    <h2>📚 已索引文档</h2>
+    <div id="docList" class="doc-list">
+      <div class="empty">加载中...</div>
+    </div>
+  </div>
+
+  <!-- 检索测试 -->
+  <div class="kb-section">
+    <h2>🔍 混合检索测试（BM25 + 向量 + RRF）</h2>
+    <form class="search-form" id="searchForm">
+      <input type="text" id="searchQuery" placeholder="输入查询，如：支付失败 RISK_REJECT 怎么排查">
+      <select id="searchDomain" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;">
+        <option value="">全部领域</option>
+        <option value="payment">支付域</option>
+        <option value="trade">交易域</option>
+        <option value="marketing">营销域</option>
+      </select>
+      <button type="submit">检索</button>
+    </form>
+    <div id="searchResults" class="search-results"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const API = '/api/knowledge';
+
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (isError ? ' error' : '');
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3500);
+}
+
+// 加载系统状态
+async function loadStatus() {
+  try {
+    const res = await fetch('/actuator/health');
+    const data = await res.json();
+    const bar = document.getElementById('statusBar');
+    const isUp = data.status === 'UP';
+    bar.innerHTML = `
+      <span class="status-badge ${isUp ? 'ok' : 'warn'}">系统 ${data.status}</span>
+      <span class="status-badge ok">RAG: spring-ai 模式</span>
+      <span class="status-badge ok">Embedding: BAAI/bge-m3</span>
+      <span class="status-badge ok">VectorStore: Redis Stack</span>
+      <span class="status-badge ok">Memory: Redis 持久化</span>
+    `;
+  } catch(e) {
+    document.getElementById('statusBar').innerHTML = '<span class="status-badge warn">状态获取失败</span>';
+  }
+}
+
+// 文件上传
+document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const file = document.getElementById('fileInput').files[0];
+  if (!file) return showToast('请选择文件', true);
+
+  const isPdf = file.name.toLowerCase().endsWith('.pdf');
+  const progress = document.getElementById('uploadProgress');
+  progress.style.display = 'block';
+
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('domain', document.getElementById('domainSelect').value);
+
+  try {
+    const res = await fetch(API + '/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    progress.style.display = 'none';
+    if (data.success) {
+      showToast(`${isPdf ? 'PDF' : '文档'}已索引 ${data.chunks} 个分块`);
+      document.getElementById('fileInput').value = '';
+      loadDocuments();
+    } else {
+      showToast(data.message, true);
+    }
+  } catch (err) {
+    progress.style.display = 'none';
+    showToast('上传失败: ' + err.message, true);
+  }
+});
+
+// 文本上传
+async function uploadText() {
+  const content = document.getElementById('textContent').value;
+  if (!content.trim()) return showToast('请输入内容', true);
+  const body = {
+    content,
+    filename: document.getElementById('textFilename').value || '文本输入',
+    domain: document.getElementById('textDomain').value,
+    subDomain: 'general'
+  };
+  try {
+    const res = await fetch(API + '/upload-text', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message);
+      document.getElementById('textContent').value = '';
+      document.getElementById('textFilename').value = '';
+      loadDocuments();
+    } else { showToast(data.message, true); }
+  } catch (err) { showToast('提交失败: ' + err.message, true); }
+}
+
+// 加载文档列表
+async function loadDocuments() {
+  try {
+    const res = await fetch(API + '/documents');
+    const docs = await res.json();
+    const el = document.getElementById('docList');
+    if (docs.length === 0) {
+      el.innerHTML = '<div class="empty">暂无已索引文档。上传文档后将自动出现在此处。</div>';
+      return;
+    }
+    el.innerHTML = docs.map(d => `
+      <div class="doc-item">
+        <div class="info">
+          <strong>${esc(d.filename)}</strong>
+          <span style="font-size:11px;margin-left:6px;padding:1px 6px;background:#e9ecef;border-radius:99px;">${esc(d.format||'text')}</span>
+          <div class="meta">ID: ${esc(d.docId)} · ${d.chunkCount} 个分块 · 领域: ${esc(d.domainCode||'general')}</div>
+        </div>
+        <button class="btn-del" onclick="deleteDoc('${esc(d.docId)}')">删除</button>
+      </div>
+    `).join('');
+  } catch (err) {
+    document.getElementById('docList').innerHTML = '<div class="empty">加载失败</div>';
+  }
+}
+
+// 删除文档
+async function deleteDoc(docId) {
+  if (!confirm('确认删除该文档？向量数据需手动从 Redis 清理。')) return;
+  try {
+    await fetch(API + '/documents/' + docId, { method: 'DELETE' });
+    showToast('已删除');
+    loadDocuments();
+  } catch (err) { showToast('删除失败', true); }
+}
+
+// 检索测试
+document.getElementById('searchForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const query = document.getElementById('searchQuery').value.trim();
+  if (!query) return showToast('请输入查询', true);
+  const domain = document.getElementById('searchDomain').value;
+  const params = new URLSearchParams({ query, topK: '8' });
+  if (domain) params.set('domain', domain);
+  try {
+    const res = await fetch(API + '/search?' + params);
+    const results = await res.json();
+    const el = document.getElementById('searchResults');
+    if (results.length === 0) {
+      el.innerHTML = '<div class="empty">未找到相关文档片段（尝试切换检索模式或扩展查询词）</div>';
+      return;
+    }
+    el.innerHTML = results.map((r, i) => `
+      <div class="result-item">
+        <div class="title">#${i + 1} ${esc(r.title || r.chunkId)}</div>
+        <div class="content">${esc(r.content)}</div>
+        <div class="score-bar">
+          <span class="score">相似度: ${(r.score * 100).toFixed(1)}%</span>
+          <span class="score">领域: ${esc(r.domainCode || '-')}</span>
+          <span class="score">来源: ${esc(r.source || '-')}</span>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) { showToast('检索失败: ' + err.message, true); }
+});
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+loadStatus();
+loadDocuments();
+</script>
+</body>
+</html>
