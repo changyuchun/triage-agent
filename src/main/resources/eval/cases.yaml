@@ -1,0 +1,121 @@
+# 评估黄金集（Ground Truth Dataset）
+# 每条用例对应一类真实问题，覆盖所有 tag 维度
+# 新增用例：填写 caseId / userText / expected，presetSlots 可选
+
+cases:
+
+  # ── 支付域：诊断类 ──────────────────────────────────────────
+
+  - caseId: pay_timeout_001
+    userText: "支付失败了，错误码是 PAY_TIMEOUT，麻烦帮我排查一下"
+    presetSlots:
+      payOrderId: PAY20240101001
+      errorCode: PAY_TIMEOUT
+      env: PROD
+    expected:
+      domainCode: payment
+      toolCodes:
+        - payment_query
+        - log_query
+      minQualityScore: 0.5
+      mustContainFacts:
+        - PAY_TIMEOUT
+        - 渠道
+    tags: [payment, diagnosis, has-error-code]
+
+  - caseId: pay_risk_reject_001
+    userText: "支付被风控拒绝了，riskCode 是什么意思？"
+    presetSlots:
+      payOrderId: PAY20240102001
+      errorCode: RISK_REJECT
+      env: PROD
+    expected:
+      domainCode: payment
+      toolCodes:
+        - payment_query
+      minQualityScore: 0.4
+      mustContainFacts:
+        - 风控
+    tags: [payment, diagnosis, has-error-code]
+
+  # ── 支付域：知识类 ──────────────────────────────────────────
+
+  - caseId: pay_knowledge_001
+    userText: "什么是风控拒绝？支付被风控拦截是什么意思？"
+    expected:
+      domainCode: payment
+      toolCodes: []
+      mustContainFacts:
+        - 风控
+    tags: [payment, knowledge-only]
+
+  - caseId: pay_knowledge_002
+    userText: "支付渠道超时和支付失败有什么区别？"
+    expected:
+      domainCode: payment
+      toolCodes: []
+      mustContainFacts:
+        - 超时
+    tags: [payment, knowledge-only]
+
+  # ── 交易域：诊断类 ──────────────────────────────────────────
+
+  - caseId: trade_fulfillment_001
+    userText: "订单支付成功了但没有发货，帮我排查一下"
+    presetSlots:
+      orderId: ORD20240202001
+      env: PROD
+    expected:
+      domainCode: trade
+      toolCodes:
+        - trade_query
+      minQualityScore: 0.4
+      mustContainFacts:
+        - 履约
+    tags: [trade, diagnosis]
+
+  - caseId: trade_stock_001
+    userText: "下单提示库存不足，但是商品页面显示有货，是什么原因？"
+    expected:
+      domainCode: trade
+      toolCodes: []
+      mustContainFacts:
+        - 库存
+    tags: [trade, knowledge-only]
+
+  # ── 跨域：诊断类 ──────────────────────────────────────────
+
+  - caseId: cross_domain_001
+    userText: "支付成功了但订单状态一直是待支付，没有更新"
+    presetSlots:
+      payOrderId: PAY20240303001
+      orderId: ORD20240303001
+      env: PROD
+    expected:
+      domainCode: trade
+      toolCodes:
+        - trade_query
+      minQualityScore: 0.4
+      mustContainFacts:
+        - 订单
+    tags: [cross-domain, diagnosis]
+
+  # ── 营销域：知识类 ──────────────────────────────────────────
+
+  - caseId: marketing_knowledge_001
+    userText: "优惠券叠加使用的规则是什么？"
+    expected:
+      domainCode: marketing
+      toolCodes: []
+      mustContainFacts:
+        - 优惠
+    tags: [marketing, knowledge-only]
+
+  - caseId: marketing_knowledge_002
+    userText: "满减活动和折扣券可以同时使用吗？"
+    expected:
+      domainCode: marketing
+      toolCodes: []
+      mustContainFacts:
+        - 活动
+    tags: [marketing, knowledge-only]

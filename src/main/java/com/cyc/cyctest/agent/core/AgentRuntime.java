@@ -101,9 +101,9 @@ public class AgentRuntime implements IAgentRuntime {
             ctx = switch (ctx.state()) {
                 case EXTRACT -> extract(ctx, memory);
                 case CLARIFY -> clarify(ctx, memory);
-                case ROUTE -> route(ctx);
-                case PLAN -> plan(ctx);
-                case EXECUTE -> execute(ctx);
+                case ROUTE -> route(ctx, memory);
+                case PLAN -> plan(ctx, memory);
+                case EXECUTE -> execute(ctx, memory);
                 case RERETRIEVE -> reRetrieve(ctx);
                 case SYNTHESIZE -> synthesize(ctx, memory);
                 default -> ctx.withState(AgentState.FAILED, "unexpected state");
@@ -159,9 +159,10 @@ public class AgentRuntime implements IAgentRuntime {
         return ctx.withState(AgentState.WAITING_USER_INPUT, "wait user clarification");
     }
 
-    private AgentRunContext route(AgentRunContext ctx) {
+    private AgentRunContext route(AgentRunContext ctx, ConversationContext memory) {
         RouteResult route = domainRouter.route(ctx.userText(), ctx.clarify(), ctx.slots());
-        memoryStore.load(ctx.sessionId()).currentRoute(route);
+        memory.currentRoute(route);
+        memoryStore.save(memory);
         if ("clarify_required".equals(route.handleMode())) {
             String answer = "这个问题可能涉及多个领域，请确认你要排查的是支付、交易、履约还是营销？";
             return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), route, ctx.plan(),
@@ -173,17 +174,19 @@ public class AgentRuntime implements IAgentRuntime {
                 .withState(AgentState.PLAN, route.reason());
     }
 
-    private AgentRunContext plan(AgentRunContext ctx) {
+    private AgentRunContext plan(AgentRunContext ctx, ConversationContext memory) {
         ExecutionPlan plan = taskPlanner.plan(ctx.userText(), ctx.slots(), ctx.route());
-        memoryStore.load(ctx.sessionId()).currentPlan(plan);
+        memory.currentPlan(plan);
+        memoryStore.save(memory);
         return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), ctx.route(), plan,
                 ctx.evidence(), AgentState.EXECUTE, ctx.retryCount(), ctx.finalAnswer(), ctx.clarifyQuestion(), ctx.trace())
                 .withState(AgentState.EXECUTE, "steps=" + plan.steps().size());
     }
 
-    private AgentRunContext execute(AgentRunContext ctx) {
+    private AgentRunContext execute(AgentRunContext ctx, ConversationContext memory) {
         EvidencePackage evidence = executionEngine.execute(ctx.plan(), ctx.slots(), ctx.route());
-        memoryStore.load(ctx.sessionId()).evidencePackage(evidence);
+        memory.evidencePackage(evidence);
+        memoryStore.save(memory);
         AgentState next = evidence.qualityScore() < properties.runtime().minEvidenceScore() && ctx.retryCount() < 1
                 ? AgentState.RERETRIEVE : AgentState.SYNTHESIZE;
         return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), ctx.route(), ctx.plan(),

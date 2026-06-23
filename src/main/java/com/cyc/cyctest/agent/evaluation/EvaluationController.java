@@ -3,28 +3,27 @@ package com.cyc.cyctest.agent.evaluation;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * RAG 评估 API。
+ * 评估 API。
  * <p>
- * 核心能力：LLM-as-Judge + RAGAS 指标（Faithfulness / Relevance / Completeness）。
- * 面试场景：展示对 AI 系统评估体系的理解，这是生产 AI 应用的核心质量保障手段。
+ * 提供两个入口：
+ * 1. POST /api/eval/judge — 单次 LLM-as-Judge（给定 question/answer/context 打分）
+ * 2. POST /api/eval/run  — 批量跑黄金集，返回完整 EvalReport
  */
 @RestController
 @RequestMapping("/api/eval")
 public class EvaluationController {
 
     private final EvaluationService evaluationService;
+    private final EvalRunner evalRunner;
 
-    public EvaluationController(EvaluationService evaluationService) {
+    public EvaluationController(EvaluationService evaluationService, EvalRunner evalRunner) {
         this.evaluationService = evaluationService;
+        this.evalRunner = evalRunner;
     }
 
     /**
-     * 使用 LLM-as-Judge 评估一次 AI 回答。
-     * <p>
-     * 典型用途：
-     * 1. 上线前的批量回归评估（Batch API 可降低 50% 成本）
-     * 2. 在线质量监控（抽样评估生产流量）
-     * 3. A/B 实验效果对比
+     * 单次 LLM-as-Judge 评估（RAGAS 四指标）。
+     * 典型用途：在线抽样评估生产流量、A/B 实验效果对比。
      */
     @PostMapping("/judge")
     public EvaluationService.EvalResult judge(@RequestBody EvalRequest request) {
@@ -34,5 +33,40 @@ public class EvaluationController {
         return evaluationService.evaluate(request.question(), request.answer(), request.context());
     }
 
+    /**
+     * 批量跑黄金集，返回完整 EvalReport。
+     * 包含路由准确率、工具覆盖率、Faithfulness、Relevance 等全维度指标。
+     * LLM 不可用时 LLM-as-Judge 自动跳过，规则评估仍正常运行。
+     */
+    @PostMapping("/run")
+    public EvalReport run() {
+        return evalRunner.run();
+    }
+
+    /**
+     * 只返回评估摘要（不含全量用例详情，响应更轻量）。
+     */
+    @PostMapping("/run/summary")
+    public EvalSummary runSummary() {
+        EvalReport report = evalRunner.run();
+        return new EvalSummary(
+                report.totalCases(), report.passedCases(), report.passRate(),
+                report.routeAccuracy(), report.avgToolRecallRate(),
+                report.avgFaithfulness(), report.avgRelevance(),
+                report.failures().stream().map(EvalCaseResult::caseId).toList()
+        );
+    }
+
     public record EvalRequest(String question, String answer, String context) {}
+
+    public record EvalSummary(
+            int totalCases,
+            int passedCases,
+            double passRate,
+            double routeAccuracy,
+            double avgToolRecallRate,
+            double avgFaithfulness,
+            double avgRelevance,
+            java.util.List<String> failedCaseIds
+    ) {}
 }
