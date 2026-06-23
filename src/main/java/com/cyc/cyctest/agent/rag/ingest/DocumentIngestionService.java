@@ -48,8 +48,13 @@ public class DocumentIngestionService {
 
     public DocumentIngestionService(VectorStore vectorStore) {
         this.vectorStore = vectorStore;
-        // Spring AI 2.0 TokenTextSplitter 构造器：(chunkSize, minChunkSize, minEmbedLength, maxNumChunks, keepSeparator, separators)
-        this.splitter = new TokenTextSplitter(CHUNK_SIZE_TOKENS, 350, MIN_CHUNK_CHARS, 10000, true, List.of());
+        this.splitter = TokenTextSplitter.builder()
+                .withChunkSize(CHUNK_SIZE_TOKENS)
+                .withMinChunkSizeChars(350)
+                .withMinChunkLengthToEmbed(MIN_CHUNK_CHARS)
+                .withMaxNumChunks(10000)
+                .withKeepSeparator(true)
+                .build();
     }
 
     // -------- 公共 API --------

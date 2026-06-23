@@ -15,9 +15,8 @@ import java.util.Map;
  * 执行节点：并行执行计划中的工具调用和知识检索，收集证据（Evidence）。
  * <p>
  * 内部实现（TaskExecutionEngine）：
- * - KNOWLEDGE_RETRIEVE：顺序执行（依赖知识基础）
+ * - KNOWLEDGE_RETRIEVE：顺序执行
  * - TOOL_CALL：Parallel Tool Calling（CompletableFuture.allOf 并行）
- * - DOMAIN_ANALYSIS：在工具和知识都收集完后执行
  * <p>
  * 输出 State：{@link AgentStateKeys#EVIDENCE}、{@link AgentStateKeys#QUALITY_SCORE}
  * 质量分数决定后续走 reretrieve（不足时）还是 synthesize（足够时）。
@@ -53,13 +52,15 @@ public class ExecuteNode {
 
         boolean lowQuality = evidence.qualityScore() < properties.runtime().minEvidenceScore()
                 && retryCount < 1;
+        String nextNode = lowQuality ? "reretrieve" : "synthesize";
         return Map.of(
                 AgentStateKeys.EVIDENCE, evidence,
                 AgentStateKeys.QUALITY_SCORE, evidence.qualityScore(),
+                AgentStateKeys.NEXT_NODE, nextNode,
                 AgentStateKeys.AGENT_STATE,
                         lowQuality ? AgentState.RERETRIEVE.name() : AgentState.SYNTHESIZE.name(),
                 AgentStateKeys.TRACE,
-                        "execute: quality=" + evidence.qualityScore() + " retry=" + retryCount);
+                        "execute→" + nextNode + ": quality=" + evidence.qualityScore() + " retry=" + retryCount);
     }
 
     @SuppressWarnings("unchecked")

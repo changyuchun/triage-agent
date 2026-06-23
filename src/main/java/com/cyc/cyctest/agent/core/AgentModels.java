@@ -21,7 +21,7 @@ public final class AgentModels {
     }
 
     public enum StepType {
-        KNOWLEDGE_RETRIEVE, TOOL_CALL, DOMAIN_ANALYSIS
+        KNOWLEDGE_RETRIEVE, TOOL_CALL
     }
 
     public record SlotState(

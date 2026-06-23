@@ -7,7 +7,6 @@ import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.exception.GraphStateException;
 import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
-import com.cyc.cyctest.agent.config.AgentProperties;
 import com.cyc.cyctest.agent.graph.node.*;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -53,10 +52,11 @@ public class AgentStateGraph {
             // 输入
             state.put(AgentStateKeys.SESSION_ID,       new ReplaceStrategy());
             state.put(AgentStateKeys.USER_TEXT,        new ReplaceStrategy());
+            // 路由控制（节点写入，条件边读取）
+            state.put(AgentStateKeys.NEXT_NODE,        new ReplaceStrategy());
             // 槽位与意图
             state.put(AgentStateKeys.SLOTS,            new ReplaceStrategy());
             state.put(AgentStateKeys.CLARIFY,          new ReplaceStrategy());
-            state.put(AgentStateKeys.NEED_CLARIFY,     new ReplaceStrategy());
             state.put(AgentStateKeys.CLARIFY_QUESTION, new ReplaceStrategy());
             // 路由与计划
             state.put(AgentStateKeys.ROUTE,            new ReplaceStrategy());
@@ -81,7 +81,6 @@ public class AgentStateGraph {
     @Bean
     public CompiledGraph agentCompiledGraph(
             KeyStrategyFactory agentKeyStrategyFactory,
-            AgentProperties properties,
             // 各节点 Bean（@Component，自动注入）
             ExtractNode extractNode,
             ClarifyNode clarifyNode,
@@ -107,8 +106,9 @@ public class AgentStateGraph {
         graph.addEdge(StateGraph.START, "extract");
 
         // extract → clarify（需要追问）| route（直接路由）
+        // 节点在 NEXT_NODE 写入目标，条件边直接读取，无路由逻辑
         graph.addConditionalEdges("extract",
-                needClarifyEdge(),
+                nextNodeEdge("route"),
                 Map.of("clarify", "clarify", "route", "route"));
 
         // clarify → END（本轮结束，等待用户下一轮输入）
@@ -116,7 +116,7 @@ public class AgentStateGraph {
 
         // route → clarify（路由置信度不足）| plan（正常规划）
         graph.addConditionalEdges("route",
-                routeDecisionEdge(),
+                nextNodeEdge("plan"),
                 Map.of("clarify", "clarify", "plan", "plan"));
 
         // plan → execute（无条件）
@@ -124,7 +124,7 @@ public class AgentStateGraph {
 
         // execute → reretrieve（质量不足 && 未重试）| synthesize（质量达标）
         graph.addConditionalEdges("execute",
-                qualityCheckEdge(properties),
+                nextNodeEdge("synthesize"),
                 Map.of("reretrieve", "reretrieve", "synthesize", "synthesize"));
 
         // reretrieve → execute（重写后重新执行，最多 1 次）
@@ -142,28 +142,17 @@ public class AgentStateGraph {
     }
 
     // =========================================================================
-    // 3. 条件边（Edge Actions）：读取 State 决定下一跳节点
+    // 3. 条件边（Edge Actions）：统一从 NEXT_NODE 读取节点名
+    //    路由逻辑由各节点在执行时写入 NEXT_NODE，条件边只做传递，不含业务判断。
     // =========================================================================
 
-    /** extract 节点出边：NEED_CLARIFY=true → clarify，否则 → route */
-    private AsyncEdgeAction needClarifyEdge() {
+    /**
+     * 通用条件边：读取节点写入的 {@link AgentStateKeys#NEXT_NODE} 决定下一跳。
+     *
+     * @param defaultTarget 当 NEXT_NODE 未写入时的保底节点名
+     */
+    private AsyncEdgeAction nextNodeEdge(String defaultTarget) {
         return AsyncEdgeAction.edge_async(state ->
-                state.value(AgentStateKeys.NEED_CLARIFY, false) ? "clarify" : "route");
-    }
-
-    /** route 节点出边：NEED_CLARIFY=true（handleMode=clarify_required）→ clarify，否则 → plan */
-    private AsyncEdgeAction routeDecisionEdge() {
-        return AsyncEdgeAction.edge_async(state ->
-                state.value(AgentStateKeys.NEED_CLARIFY, false) ? "clarify" : "plan");
-    }
-
-    /** execute 节点出边：质量不足且未重试 → reretrieve，否则 → synthesize */
-    private AsyncEdgeAction qualityCheckEdge(AgentProperties properties) {
-        return AsyncEdgeAction.edge_async(state -> {
-            double score = state.value(AgentStateKeys.QUALITY_SCORE, 0.0);
-            int retry   = state.value(AgentStateKeys.RETRY_COUNT, 0);
-            return (score < properties.runtime().minEvidenceScore() && retry < 1)
-                    ? "reretrieve" : "synthesize";
-        });
+                (String) state.value(AgentStateKeys.NEXT_NODE).orElse(defaultTarget));
     }
 }

@@ -17,10 +17,10 @@ import java.util.Map;
  * <p>
  * 双模式：LLM 路由（置信度高时）+ 规则路由（降级）。
  * <p>
- * 输出 State keys：{@link AgentStateKeys#ROUTE}、{@link AgentStateKeys#NEED_CLARIFY}
+ * 输出 State keys：{@link AgentStateKeys#ROUTE}、{@link AgentStateKeys#NEXT_NODE}
  * <p>
- * 当 handleMode=clarify_required 时，节点将 NEED_CLARIFY 置 true，
- * 由出边的条件判断（routeDecisionEdge）路由到 clarify 节点。
+ * 当 handleMode=clarify_required 时，节点写入 NEXT_NODE="clarify"，
+ * 出边（nextNodeEdge）直接读取该值路由到 clarify 节点。
  */
 @Component
 public class RouteNode {
@@ -53,21 +53,20 @@ public class RouteNode {
 
         if ("clarify_required".equals(route.handleMode())) {
             String q = "这个问题可能涉及多个领域，请确认你要排查的是支付、交易还是营销？";
-            result.put(AgentStateKeys.NEED_CLARIFY, true);
+            result.put(AgentStateKeys.NEXT_NODE, "clarify");
             result.put(AgentStateKeys.CLARIFY_QUESTION, q);
             result.put(AgentStateKeys.AGENT_STATE, AgentState.CLARIFY.name());
             result.put(AgentStateKeys.TRACE,
                     "route→clarify: low_confidence=" + route.confidence());
-            memory.pendingClarifyQuestion(q);
-            memory.increaseClarifyCount();
-            memStore.save(memory);
+            // pendingClarifyQuestion 和 increaseClarifyCount 由 ClarifyNode 统一负责，此处不重复
         } else {
-            result.put(AgentStateKeys.NEED_CLARIFY, false);
+            result.put(AgentStateKeys.NEXT_NODE, "plan");
             result.put(AgentStateKeys.AGENT_STATE, AgentState.PLAN.name());
             result.put(AgentStateKeys.TRACE,
                     "route→plan: " + route.domainCode() + "/" + route.subDomainCode()
                             + " confidence=" + route.confidence());
         }
+        memStore.save(memory);  // 两个分支统一持久化 currentRoute
         return result;
     }
 

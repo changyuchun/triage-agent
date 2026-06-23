@@ -18,7 +18,7 @@ import java.util.Map;
  * - LLM 可用时：让模型结合领域、槽位、工具列表生成步骤
  * - LLM 不可用时：基于 handleMode 走规则模板
  * <p>
- * ExecutionPlan 中的每个 PlanStep 包含：stepId、type（KNOWLEDGE_RETRIEVE/TOOL_CALL/DOMAIN_ANALYSIS）、
+ * ExecutionPlan 中的每个 PlanStep 包含：stepId、type（KNOWLEDGE_RETRIEVE/TOOL_CALL）、
  * toolCode、query、dependsOn、required。
  */
 @Component
@@ -46,10 +46,10 @@ public class PlanNode {
 
         ConversationContext memory = memStore.load(sessionId);
         memory.currentPlan(plan);
+        memStore.save(memory);
 
         return Map.of(
                 AgentStateKeys.PLAN, plan,
-                AgentStateKeys.AGENT_STATE, AgentState.EXECUTE.name(),
                 AgentStateKeys.TRACE, "plan: steps=" + plan.steps().size());
     }
 

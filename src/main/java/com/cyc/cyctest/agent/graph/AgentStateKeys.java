@@ -10,11 +10,13 @@ public interface AgentStateKeys {
     String SESSION_ID      = "sessionId";
     String USER_TEXT       = "userText";
 
+    // ---- 路由控制 ----
+    String NEXT_NODE        = "next_node";       // String（节点名，条件边读取决定下一跳）
+
     // ---- 槽位与意图 ----
-    String SLOTS           = "slots";           // AgentModels.SlotState
-    String CLARIFY         = "clarify";         // AgentModels.ClarifyLlmResult
-    String NEED_CLARIFY    = "needClarify";     // Boolean
-    String CLARIFY_QUESTION = "clarifyQuestion";// String
+    String SLOTS            = "slots";           // AgentModels.SlotState
+    String CLARIFY          = "clarify";         // AgentModels.ClarifyLlmResult
+    String CLARIFY_QUESTION = "clarifyQuestion"; // String
 
     // ---- 路由与计划 ----
     String ROUTE           = "route";           // AgentModels.RouteResult

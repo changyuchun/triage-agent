@@ -4,6 +4,7 @@ import com.cyc.cyctest.agent.core.AgentModels.AgentRunContext;
 import com.cyc.cyctest.agent.core.AgentModels.Evidence;
 import com.cyc.cyctest.agent.llm.JsonSupport;
 import com.cyc.cyctest.agent.llm.LlmClient;
+import com.cyc.cyctest.agent.skill.DomainSkillLoader;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -13,10 +14,12 @@ import java.util.stream.Collectors;
 public class AnswerSynthesizer {
     private final LlmClient llmClient;
     private final JsonSupport jsonSupport;
+    private final DomainSkillLoader skillLoader;
 
-    public AnswerSynthesizer(LlmClient llmClient, JsonSupport jsonSupport) {
+    public AnswerSynthesizer(LlmClient llmClient, JsonSupport jsonSupport, DomainSkillLoader skillLoader) {
         this.llmClient = llmClient;
         this.jsonSupport = jsonSupport;
+        this.skillLoader = skillLoader;
     }
 
     /**
@@ -29,12 +32,15 @@ public class AnswerSynthesizer {
         if (!llmClient.available()) {
             return templateAnswer(ctx);
         }
+        String domainCode = ctx.route() != null ? ctx.route().domainCode() : "";
+        String domainSop = skillLoader.sopFor(domainCode);
+        String sopSection = domainSop.isBlank() ? "" : "\n\n领域诊断 SOP（按此标准回答，不得偏离）：\n" + domainSop;
         String system = """
                 你是基础平台智能答疑 Agent 的答案合成模块。
                 严格基于证据回答，不要编造工具没有查到的事实。
                 输出结构：核心结论、关键事实、排查过程、建议、限制。
-                事实后标注 [ref:evidenceId]。
-                """;
+                事实后标注 [ref:evidenceId]。%s
+                """.formatted(sopSection);
 
         // 将情景记忆注入 Prompt：让 LLM 参考历史相似问题的处理结论
         String episodicSection = "";

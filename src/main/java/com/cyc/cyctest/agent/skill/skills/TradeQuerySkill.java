@@ -1,5 +1,7 @@
 package com.cyc.cyctest.agent.skill.skills;
 
+import com.cyc.cyctest.agent.core.AgentModels.RouteResult;
+import com.cyc.cyctest.agent.core.AgentModels.SlotState;
 import com.cyc.cyctest.agent.skill.AgentSkill;
 import com.cyc.cyctest.agent.tool.ToolModels.ToolDefinition;
 import com.cyc.cyctest.agent.tool.ToolModels.ToolExecutionRequest;
@@ -24,6 +26,19 @@ public class TradeQuerySkill implements AgentSkill {
     @Override
     public String category() {
         return "trade";
+    }
+
+    @Override
+    public boolean shouldActivate(RouteResult route, SlotState slots) {
+        // 交易域、有订单号、handleMode 需要工具调用
+        return "trade".equals(route.domainCode())
+                && slots.hasObjectId()
+                && (route.handleMode().contains("tool"));
+    }
+
+    @Override
+    public boolean requiresKnowledge() {
+        return true; // 订单异常通常需要配合知识库排查 SOP
     }
 
     @Override

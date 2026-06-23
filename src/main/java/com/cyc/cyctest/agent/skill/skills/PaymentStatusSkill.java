@@ -1,5 +1,7 @@
 package com.cyc.cyctest.agent.skill.skills;
 
+import com.cyc.cyctest.agent.core.AgentModels.RouteResult;
+import com.cyc.cyctest.agent.core.AgentModels.SlotState;
 import com.cyc.cyctest.agent.skill.AgentSkill;
 import com.cyc.cyctest.agent.tool.ToolModels.ToolDefinition;
 import com.cyc.cyctest.agent.tool.ToolModels.ToolExecutionRequest;
@@ -25,6 +27,19 @@ public class PaymentStatusSkill implements AgentSkill {
     @Override
     public String category() {
         return "payment";
+    }
+
+    @Override
+    public boolean shouldActivate(RouteResult route, SlotState slots) {
+        // 支付域、有具体查询对象（支付单/订单号）、handleMode 需要工具调用
+        return "payment".equals(route.domainCode())
+                && slots.hasObjectId()
+                && (route.handleMode().contains("tool"));
+    }
+
+    @Override
+    public boolean requiresKnowledge() {
+        return true; // 支付诊断通常需要配合 SOP/错误码知识库
     }
 
     @Override

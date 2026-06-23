@@ -41,7 +41,6 @@ public class ReRetrieveNode {
         return Map.of(
                 AgentStateKeys.PLAN, rewritten,
                 AgentStateKeys.RETRY_COUNT, retry + 1,
-                AgentStateKeys.AGENT_STATE, AgentState.EXECUTE.name(),
                 AgentStateKeys.TRACE, "reretrieve: retry=" + (retry + 1));
     }
 

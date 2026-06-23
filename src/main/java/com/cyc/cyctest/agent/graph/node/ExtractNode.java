@@ -22,7 +22,7 @@ import java.util.Map;
  * 3. 判断是否需要追问（needClarify）
  * <p>
  * 输出 State keys：{@link AgentStateKeys#SLOTS}、{@link AgentStateKeys#CLARIFY}、
- * {@link AgentStateKeys#NEED_CLARIFY}、{@link AgentStateKeys#CLARIFY_QUESTION}
+ * {@link AgentStateKeys#NEXT_NODE}、{@link AgentStateKeys#CLARIFY_QUESTION}
  */
 @Component
 public class ExtractNode {
@@ -52,16 +52,17 @@ public class ExtractNode {
         ClarifyLlmResult clarify = clarifySvc.analyze(userText, memory, slots);
         memory.currentGoal(clarify.userGoal());
         ClarifyDecision decision = clarifySvc.decide(clarify, slots, memory);
+        memStore.save(memory);  // 持久化 currentGoal 和 mergedSlots
 
         Map<String, Object> result = new HashMap<>();
+        String nextNode = decision.needAsk() ? "clarify" : "route";
         result.put(AgentStateKeys.SLOTS, slots);
         result.put(AgentStateKeys.CLARIFY, clarify);
-        result.put(AgentStateKeys.NEED_CLARIFY, decision.needAsk());
+        result.put(AgentStateKeys.NEXT_NODE, nextNode);
         result.put(AgentStateKeys.CLARIFY_QUESTION, decision.needAsk() ? decision.question() : "");
         result.put(AgentStateKeys.AGENT_STATE,
                 decision.needAsk() ? AgentState.CLARIFY.name() : AgentState.ROUTE.name());
-        result.put(AgentStateKeys.TRACE,
-                "extract→" + (decision.needAsk() ? "clarify" : "route") + ": " + decision.reason());
+        result.put(AgentStateKeys.TRACE, "extract→" + nextNode + ": " + decision.reason());
         return result;
     }
 }

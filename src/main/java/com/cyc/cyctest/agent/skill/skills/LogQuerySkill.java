@@ -1,5 +1,7 @@
 package com.cyc.cyctest.agent.skill.skills;
 
+import com.cyc.cyctest.agent.core.AgentModels.RouteResult;
+import com.cyc.cyctest.agent.core.AgentModels.SlotState;
 import com.cyc.cyctest.agent.skill.AgentSkill;
 import com.cyc.cyctest.agent.tool.ToolModels.ToolDefinition;
 import com.cyc.cyctest.agent.tool.ToolModels.ToolExecutionRequest;
@@ -29,6 +31,12 @@ public class LogQuerySkill implements AgentSkill {
     @Override
     public String category() {
         return "observability";
+    }
+
+    @Override
+    public boolean shouldActivate(RouteResult route, SlotState slots) {
+        // 日志查询作为跨领域辅助能力：有 errorCode 槽位时补充日志证据
+        return slots.errorCode() != null && !slots.errorCode().isBlank();
     }
 
     @Override
