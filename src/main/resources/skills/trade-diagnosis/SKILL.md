@@ -1,10 +1,39 @@
 ---
 name: trade-diagnosis
 description: 交易域诊断技能，覆盖库存锁定失败、履约异常、订单关闭、超卖等核心问题的排查 SOP
+
 domain: trade
-allowed_tools:
-  - trade_query
-  - log_query
+sub_domain: trade_diagnosis
+
+activate_when:
+  domain: trade
+  sub_domain:
+    - trade_status
+    - trade_diagnosis
+  requires:
+    - slots.hasObjectId
+    - route.needsTool
+
+requires_knowledge: true
+
+tool_flow:
+  - stepId: trade_query_step
+    toolCode: trade_query
+    args:
+      orderId: "${slots.orderId}"
+      env: "${slots.env}"
+    required: true
+
+  - stepId: log_query_step
+    toolCode: log_query
+    args:
+      keyword: "${trade_query_step.errorCode}"
+      timeRange: "1h"
+      level: ERROR
+    dependsOn:
+      - trade_query_step
+    condition: "${trade_query_step.status} == FAILED"
+    required: false
 ---
 
 # 交易域诊断 SOP
@@ -17,8 +46,7 @@ allowed_tools:
 
 **排查步骤**：
 1. 查看 `trade_query.status`：若为 `CLOSED`，确认关闭原因是否为库存不足
-2. 查看商品 SKU 当前库存状态（需运营侧工具，Agent 可提示查看渠道库存管理台）
-3. 结合 `log_query` 确认是业务正常拦截还是系统 Bug
+2. 结合 `log_query` 确认是业务正常拦截还是系统 Bug
 
 **处置建议**：
 - 正常售罄 → 告知用户商品已售完，引导关注补货或推荐替代商品
@@ -35,8 +63,7 @@ allowed_tools:
    - `PENDING`：等待履约，检查是否长时间未推进（> 30min 为异常）
    - `FAILED`：履约明确失败，查日志定位失败节点
    - `DELIVERING`：已在配送中，若用户未收到需联系物流
-2. 结合 `log_query` 查 traceId，定位履约失败的具体服务节点（WMS/ERP/物流单生成）
-3. 查看是否有人工干预记录（运营补单流程）
+2. 结合 `log_query` 查 traceId，定位履约失败的具体服务节点
 
 **处置建议**：
 - 履约卡住 > 1h → 触发人工补单，联系仓库 oncall
@@ -59,20 +86,6 @@ allowed_tools:
 **处置建议**：
 - 支付前超时关闭 → 引导重新下单
 - 支付后异常关闭 → 确认退款已发起，告知退款到账周期（T+1~T+3）
-
----
-
-## INVENTORY_LOCKED（库存锁定异常）
-
-**根因**：订单提交时库存锁定成功，但后续履约阶段库存释放或重复锁定，导致状态不一致。
-
-**排查步骤**：
-1. 查看 `trade_query.items` 中各 SKU 的库存锁定状态
-2. 结合 `log_query` 查库存服务日志，确认锁定/释放流水是否完整
-
-**处置建议**：
-- 状态不一致 → 上报库存中心 oncall，手动修复库存台账
-- 同时评估对用户的影响，确保已发货或已退款
 
 ---
 

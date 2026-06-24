@@ -16,9 +16,11 @@ public class Bm25Retriever {
     private static final double K1 = 1.2;
     private static final double B = 0.75;
     private final KnowledgeCorpus corpus;
+    private final RuntimeKnowledgeIndex runtimeIndex;
 
-    public Bm25Retriever(KnowledgeCorpus corpus) {
+    public Bm25Retriever(KnowledgeCorpus corpus, RuntimeKnowledgeIndex runtimeIndex) {
         this.corpus = corpus;
+        this.runtimeIndex = runtimeIndex;
     }
 
     public List<KnowledgeChunk> search(RetrieveRequest request, int topK) {
@@ -87,7 +89,9 @@ public class Bm25Retriever {
     }
 
     private List<KnowledgeChunk> filtered(RetrieveRequest request) {
-        return corpus.chunks().stream()
+        List<KnowledgeChunk> searchableChunks = new ArrayList<>(corpus.chunks());
+        searchableChunks.addAll(runtimeIndex.chunks());
+        return searchableChunks.stream()
                 .filter(c -> request.domainCode() == null || request.domainCode().equals(c.domainCode()))
                 .filter(c -> request.subDomainCode() == null || request.subDomainCode().equals(c.subDomainCode())
                         || c.subDomainCode().endsWith("knowledge"))

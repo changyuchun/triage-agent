@@ -1,10 +1,39 @@
 ---
 name: payment-diagnosis
 description: 支付域诊断技能，覆盖渠道超时、风控拦截、余额不足、重复支付等核心错误码的排查 SOP
+
 domain: payment
-allowed_tools:
-  - payment_query
-  - log_query
+sub_domain: pay_diagnosis
+
+activate_when:
+  domain: payment
+  sub_domain:
+    - pay_status
+    - pay_diagnosis
+  requires:
+    - slots.hasObjectId
+    - route.needsTool
+
+requires_knowledge: true
+
+tool_flow:
+  - stepId: payment_query_step
+    toolCode: payment_query
+    args:
+      payOrderId: "${slots.payOrderId}"
+      env: "${slots.env}"
+    required: true
+
+  - stepId: log_query_step
+    toolCode: log_query
+    args:
+      keyword: "${payment_query_step.errorCode}"
+      timeRange: "1h"
+      level: ERROR
+    dependsOn:
+      - payment_query_step
+    condition: "${payment_query_step.status} == FAILED"
+    required: false
 ---
 
 # 支付域诊断 SOP
@@ -65,10 +94,6 @@ allowed_tools:
 ## INSUFFICIENT_BALANCE（余额不足）
 
 **根因**：用户账户余额或绑定银行卡余额不足。
-
-**排查步骤**：
-1. 确认支付方式：余额支付还是银行卡快捷支付
-2. `payment_query.amount` 对比用户账户余额（需用户自查，Agent 无法获取账户余额）
 
 **处置建议**：
 - 引导用户充值或更换支付方式，提示可用余额查看路径

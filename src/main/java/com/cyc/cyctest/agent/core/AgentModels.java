@@ -135,8 +135,21 @@ public final class AgentModels {
             String toolCode,
             String query,
             List<String> dependsOn,
-            boolean required
+            boolean required,
+            Map<String, Object> args,
+            String condition        // 可选条件表达式，如 "${step1.status} == FAILED"
     ) {
+        /** 兼容旧代码（无 args、无 condition）。 */
+        public PlanStep(String stepId, StepType type, String toolCode, String query,
+                        List<String> dependsOn, boolean required) {
+            this(stepId, type, toolCode, query, dependsOn, required, null, null);
+        }
+
+        /** 兼容旧代码（有 args、无 condition）。 */
+        public PlanStep(String stepId, StepType type, String toolCode, String query,
+                        List<String> dependsOn, boolean required, Map<String, Object> args) {
+            this(stepId, type, toolCode, query, dependsOn, required, args, null);
+        }
     }
 
     public record ExecutionPlan(List<PlanStep> steps) {

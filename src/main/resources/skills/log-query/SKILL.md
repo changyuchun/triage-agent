@@ -2,8 +2,14 @@
 name: log-query
 description: 跨领域日志查询技能，用于定位错误根因、获取 traceId 关联链路
 domain: "*"
-allowed_tools:
-  - log_query
+
+activate_when:
+  domain: "*"
+  requires:
+    - route.isDiagnosis
+    - slots.hasErrorCode
+
+requires_knowledge: false
 ---
 
 # 日志查询使用指南

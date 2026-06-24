@@ -2,22 +2,33 @@ package com.cyc.cyctest.agent.rag.ingest;
 
 import com.cyc.cyctest.agent.rag.KnowledgeCorpus;
 import com.cyc.cyctest.agent.rag.KnowledgeModels.KnowledgeChunk;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
+import com.cyc.cyctest.agent.rag.RuntimeKnowledgeIndex;
+import org.apache.tika.exception.TikaException;
+import org.apache.tika.metadata.Metadata;
+import org.apache.tika.metadata.TikaCoreProperties;
+import org.apache.tika.parser.AutoDetectParser;
+import org.apache.tika.parser.ParseContext;
+import org.apache.tika.sax.BodyContentHandler;
+import org.apache.tika.sax.WriteOutContentHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Service;
+import org.xml.sax.SAXException;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -27,8 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 相比字符分割，token 分割与 Embedding 模型（bge-m3）的输入限制天然对齐。
  * <p>
  * 支持格式：
- * - 纯文本（.txt）、Markdown（.md）：直接读取
- * - PDF（.pdf）：通过 Apache PDFBox 提取文本
+ * - 文本、Markdown、HTML、PDF、Office、CSV 等：通过 Apache Tika 自动检测并提取
  * <p>
  * 写入目标：Redis VectorStore（Spring AI RedisVectorStore）。
  */
@@ -39,15 +49,20 @@ public class DocumentIngestionService {
 
     private static final int CHUNK_SIZE_TOKENS = 800;
     private static final int MIN_CHUNK_CHARS = 50;
+    private static final int MAX_EXTRACTED_CHARS = 5_000_000;
 
     private final VectorStore vectorStore;
+    private final RuntimeKnowledgeIndex runtimeKnowledgeIndex;
     private final TokenTextSplitter splitter;
+    private final AutoDetectParser parser;
 
     /** 已索引文档的元信息（仅内存，不需要持久化） */
     private final Map<String, IndexedDocument> indexedDocuments = new ConcurrentHashMap<>();
 
-    public DocumentIngestionService(VectorStore vectorStore) {
+    public DocumentIngestionService(VectorStore vectorStore, RuntimeKnowledgeIndex runtimeKnowledgeIndex) {
         this.vectorStore = vectorStore;
+        this.runtimeKnowledgeIndex = runtimeKnowledgeIndex;
+        this.parser = new AutoDetectParser();
         this.splitter = TokenTextSplitter.builder()
                 .withChunkSize(CHUNK_SIZE_TOKENS)
                 .withMinChunkSizeChars(350)
@@ -63,24 +78,20 @@ public class DocumentIngestionService {
      * 摄入纯文本内容（TXT / MD）。
      */
     public IndexedDocument ingest(String filename, String content, String domainCode, String subDomainCode) {
-        String docId = generateDocId();
-        List<Document> chunks = splitText(content, docId, filename, domainCode, subDomainCode);
-        if (chunks.isEmpty()) {
-            throw new IllegalArgumentException("文档内容为空或无法分块: " + filename);
-        }
-        vectorStore.add(chunks);
-        IndexedDocument indexed = new IndexedDocument(docId, filename, chunks.size(), domainCode, subDomainCode, "text");
-        indexedDocuments.put(docId, indexed);
-        log.info("文档 {} 已索引，共 {} 块，领域: {}", filename, chunks.size(), domainCode);
-        return indexed;
+        byte[] bytes = content == null ? new byte[0] : content.getBytes(StandardCharsets.UTF_8);
+        ExtractedDocument extracted = new ExtractedDocument(content, Map.of(
+                "contentType", "text/plain",
+                "parser", "plain-text"
+        ));
+        return indexExtracted(filename, bytes, extracted, domainCode, subDomainCode);
     }
 
     /**
-     * 摄入 PDF 文件字节流（使用 Apache PDFBox 提取文本后再分块）。
+     * 摄入任意 Tika 可识别文档字节流，提取正文与元数据后再分块。
      */
-    public IndexedDocument ingestPdf(String filename, byte[] pdfBytes, String domainCode, String subDomainCode) {
-        String text = extractPdfText(pdfBytes, filename);
-        return ingest(filename, text, domainCode, subDomainCode);
+    public IndexedDocument ingestFile(String filename, byte[] bytes, String domainCode, String subDomainCode) {
+        ExtractedDocument extracted = extractWithTika(bytes, filename);
+        return indexExtracted(filename, bytes, extracted, domainCode, subDomainCode);
     }
 
     /**
@@ -105,7 +116,14 @@ public class DocumentIngestionService {
     }
 
     public boolean deleteDocument(String docId) {
-        indexedDocuments.remove(docId);
+        IndexedDocument indexed = indexedDocuments.remove(docId);
+        List<String> chunkIds = runtimeKnowledgeIndex.deleteDocument(docId);
+        if (indexed != null && indexed.chunkIds() != null && !indexed.chunkIds().isEmpty()) {
+            chunkIds = indexed.chunkIds();
+        }
+        if (!chunkIds.isEmpty()) {
+            vectorStore.delete(chunkIds);
+        }
         return true;
     }
 
@@ -115,8 +133,38 @@ public class DocumentIngestionService {
 
     // -------- 内部方法 --------
 
+    private IndexedDocument indexExtracted(String filename, byte[] bytes, ExtractedDocument extracted,
+                                           String domainCode, String subDomainCode) {
+        String checksum = sha256(bytes);
+        String docId = checksum.substring(0, 16);
+        List<Document> chunks = splitText(extracted.text(), docId, filename, domainCode, subDomainCode,
+                checksum, bytes.length, extracted.metadata());
+        if (chunks.isEmpty()) {
+            throw new IllegalArgumentException("文档内容为空或无法分块: " + filename);
+        }
+
+        vectorStore.add(chunks);
+        runtimeKnowledgeIndex.upsertDocument(docId, toKnowledgeChunks(chunks));
+
+        IndexedDocument indexed = new IndexedDocument(
+                docId,
+                filename,
+                chunks.size(),
+                domainCode,
+                subDomainCode,
+                String.valueOf(chunks.getFirst().getMetadata().getOrDefault("contentType", "unknown")),
+                checksum,
+                chunks.stream().map(Document::getId).toList()
+        );
+        indexedDocuments.put(docId, indexed);
+        log.info("文档 {} 已索引，docId={}，共 {} 块，领域: {}，类型: {}",
+                filename, docId, chunks.size(), domainCode, indexed.format());
+        return indexed;
+    }
+
     private List<Document> splitText(String content, String docId, String filename,
-                                      String domainCode, String subDomainCode) {
+                                     String domainCode, String subDomainCode, String checksum,
+                                     int byteSize, Map<String, Object> extractedMetadata) {
         if (content == null || content.isBlank()) return List.of();
 
         Map<String, Object> baseMetadata = new HashMap<>();
@@ -125,32 +173,81 @@ public class DocumentIngestionService {
         baseMetadata.put("domainCode", domainCode != null ? domainCode : "general");
         baseMetadata.put("subDomainCode", subDomainCode != null ? subDomainCode : "general");
         baseMetadata.put("source", "user-upload");
+        baseMetadata.put("checksum", checksum);
+        baseMetadata.put("byteSize", byteSize);
+        baseMetadata.put("extractedChars", content.length());
+        baseMetadata.put("ingestedAt", Instant.now().toString());
+        baseMetadata.putAll(extractedMetadata);
 
         Document source = new Document(content, baseMetadata);
-        List<Document> chunks = splitter.apply(List.of(source));
+        List<Document> splitDocuments = splitter.apply(List.of(source));
 
-        // 补充 chunkIndex 和 title 元数据
-        for (int i = 0; i < chunks.size(); i++) {
-            chunks.get(i).getMetadata().put("chunkIndex", i);
-            chunks.get(i).getMetadata().put("totalChunks", chunks.size());
-            chunks.get(i).getMetadata().put("title", filename + " #" + (i + 1));
+        List<Document> chunks = new ArrayList<>();
+        for (int i = 0; i < splitDocuments.size(); i++) {
+            Document split = splitDocuments.get(i);
+            Map<String, Object> chunkMetadata = new HashMap<>(split.getMetadata());
+            chunkMetadata.put("chunkIndex", i);
+            chunkMetadata.put("totalChunks", splitDocuments.size());
+            chunkMetadata.put("title", filename + " #" + (i + 1));
+            chunks.add(new Document(docId + "-" + i, split.getText(), chunkMetadata));
         }
         return chunks;
     }
 
-    private String extractPdfText(byte[] pdfBytes, String filename) {
-        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
-            PDFTextStripper stripper = new PDFTextStripper();
-            String text = stripper.getText(doc);
-            log.info("PDF {} 解析完成，页数: {}，字符数: {}", filename, doc.getNumberOfPages(), text.length());
-            return text;
-        } catch (IOException e) {
-            throw new IllegalArgumentException("PDF 解析失败: " + filename + " - " + e.getMessage(), e);
+    private ExtractedDocument extractWithTika(byte[] bytes, String filename) {
+        Metadata metadata = new Metadata();
+        metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, filename);
+        BodyContentHandler handler = new BodyContentHandler(new WriteOutContentHandler(MAX_EXTRACTED_CHARS));
+        try (ByteArrayInputStream input = new ByteArrayInputStream(bytes)) {
+            parser.parse(input, handler, metadata, new ParseContext());
+            String text = handler.toString();
+            if (text == null || text.isBlank()) {
+                throw new IllegalArgumentException("文档未提取到可索引文本: " + filename);
+            }
+            Map<String, Object> tikaMetadata = new HashMap<>();
+            for (String name : metadata.names()) {
+                String value = metadata.get(name);
+                if (value != null && !value.isBlank()) {
+                    tikaMetadata.put("tika." + name, value);
+                }
+            }
+            tikaMetadata.put("contentType", metadata.get(Metadata.CONTENT_TYPE) != null
+                    ? metadata.get(Metadata.CONTENT_TYPE)
+                    : "application/octet-stream");
+            tikaMetadata.put("parser", parser.getClass().getSimpleName());
+            log.info("Tika 解析完成: {}，类型: {}，字符数: {}",
+                    filename, tikaMetadata.get("contentType"), text.length());
+            return new ExtractedDocument(text, tikaMetadata);
+        } catch (IOException | SAXException | TikaException e) {
+            throw new IllegalArgumentException("文档解析失败: " + filename + " - " + e.getMessage(), e);
         }
     }
 
-    private static String generateDocId() {
-        return UUID.randomUUID().toString().substring(0, 8);
+    private List<KnowledgeChunk> toKnowledgeChunks(List<Document> documents) {
+        return documents.stream()
+                .map(doc -> {
+                    Map<String, Object> meta = doc.getMetadata();
+                    return new KnowledgeChunk(
+                            doc.getId(),
+                            String.valueOf(meta.getOrDefault("docId", doc.getId())),
+                            String.valueOf(meta.getOrDefault("domainCode", "general")),
+                            String.valueOf(meta.getOrDefault("subDomainCode", "general")),
+                            String.valueOf(meta.getOrDefault("title", "")),
+                            doc.getText(),
+                            0,
+                            meta
+                    );
+                })
+                .toList();
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("当前 JVM 不支持 SHA-256", e);
+        }
     }
 
     public record IndexedDocument(
@@ -159,7 +256,15 @@ public class DocumentIngestionService {
             int chunkCount,
             String domainCode,
             String subDomainCode,
-            String format
+            String format,
+            String checksum,
+            List<String> chunkIds
+    ) {
+    }
+
+    private record ExtractedDocument(
+            String text,
+            Map<String, Object> metadata
     ) {
     }
 }

@@ -6,6 +6,7 @@ import com.cyc.cyctest.agent.config.AgentProperties;
 import com.cyc.cyctest.agent.core.AgentModels.*;
 import com.cyc.cyctest.agent.core.TaskExecutionEngine;
 import com.cyc.cyctest.agent.graph.AgentStateKeys;
+import com.cyc.cyctest.agent.memory.ConversationContext;
 import com.cyc.cyctest.agent.memory.MemoryStore;
 import org.springframework.stereotype.Component;
 
@@ -48,7 +49,9 @@ public class ExecuteNode {
         int retryCount = state.value(AgentStateKeys.RETRY_COUNT, 0);
 
         EvidencePackage evidence = engine.execute(plan, slots, route);
-        memStore.load(sessionId).evidencePackage(evidence);
+        ConversationContext memory = memStore.load(sessionId);
+        memory.evidencePackage(evidence);
+        memStore.save(memory);
 
         boolean lowQuality = evidence.qualityScore() < properties.runtime().minEvidenceScore()
                 && retryCount < 1;

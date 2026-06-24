@@ -2,27 +2,25 @@ package com.cyc.cyctest.agent.llm;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreaker;
-import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreakerFactory;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 基于 Spring AI 的 LlmClient 实现（生产推荐）。
  * <p>
  * 关键特性：
- * 1. Circuit Breaker（熔断器）：LLM 调用失败率 > 50% 时自动熔断，降级到备用回答，
- *    防止级联失败。类比 Sentinel 熔断——主渠道故障时自动切换备用渠道。
+ * 1. 简单熔断降级：连续失败超过阈值后自动降级，防止级联失败。
+ *    生产环境可替换为 Resilience4j 的 CircuitBreaker（需引入 resilience4j-core 依赖）。
  * 2. Token 流式输出：chatModel.stream() 逐 token 推送，实现真正的 SSE 流式。
  * 3. 可插拔：通过 agent.llm.provider=spring-ai 激活，SiliconFlowLlmClient 自动停用。
  */
@@ -31,16 +29,14 @@ import java.util.List;
 public class SpringAiLlmClient implements LlmClient {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiLlmClient.class);
-    private static final String CB_NAME = "llm-client";
+    private static final int FAILURE_THRESHOLD = 5; // 连续失败 N 次后触发降级
 
     private final ChatModel chatModel;
-    private final ReactiveCircuitBreaker circuitBreaker;
+    // 简易熔断计数器（生产替换为 Resilience4j CircuitBreaker）
+    private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
 
-    public SpringAiLlmClient(
-            @Autowired(required = false) ChatModel chatModel,
-            @Autowired(required = false) ReactiveCircuitBreakerFactory<?, ?> cbFactory) {
+    public SpringAiLlmClient(@Autowired(required = false) ChatModel chatModel) {
         this.chatModel = chatModel;
-        this.circuitBreaker = cbFactory != null ? cbFactory.create(CB_NAME) : null;
     }
 
     @Override
@@ -49,33 +45,36 @@ public class SpringAiLlmClient implements LlmClient {
     }
 
     /**
-     * 同步 LLM 调用，带 Circuit Breaker 熔断保护。
+     * 同步 LLM 调用，带简易熔断保护。
      * <p>
-     * 熔断状态机：CLOSED（正常）→ OPEN（熔断，直接走 fallback）→ HALF_OPEN（探测恢复）。
-     * 配置在 application.properties resilience4j.circuitbreaker.instances.llm-client.*
+     * 熔断概念：连续失败超过阈值直接走 fallback，成功后重置计数。
+     * 生产替换：引入 resilience4j-core，用 CircuitBreaker.decorateSupplier() 包装。
      */
     @Override
     public String complete(String systemPrompt, String userPrompt) {
         if (!available()) {
             throw new IllegalStateException("Spring AI ChatModel 未配置或不可用");
         }
-        if (circuitBreaker == null) {
-            return doComplete(systemPrompt, userPrompt);
+        if (consecutiveFailures.get() >= FAILURE_THRESHOLD) {
+            log.warn("[CB] 连续失败达阈值，触发降级");
+            return completeFallback(new RuntimeException("circuit open after " + FAILURE_THRESHOLD + " failures"));
         }
-        return circuitBreaker.run(
-                Mono.fromCallable(() -> doComplete(systemPrompt, userPrompt)),
-                throwable -> {
-                    log.error("[CB] LLM 调用失败，熔断 fallback 启动: {}", throwable.getMessage());
-                    return Mono.just(completeFallback(throwable));
-                }
-        ).block();
+        try {
+            String result = doComplete(systemPrompt, userPrompt);
+            consecutiveFailures.set(0); // 成功重置
+            return result;
+        } catch (Exception e) {
+            int failures = consecutiveFailures.incrementAndGet();
+            log.error("[CB] LLM 调用失败（{}/{}）: {}", failures, FAILURE_THRESHOLD, e.getMessage());
+            return completeFallback(e);
+        }
     }
 
     /**
      * Token 级流式输出（Stream）。
      * <p>
-     * chatModel.stream() 返回 Flux<ChatResponse>，每个元素包含一个 token chunk。
-     * SSE 端点消费此 Flux，实现浏览器侧的实时 token 渲染（首字延迟 < 200ms）。
+     * chatModel.stream() 返回 Flux&lt;ChatResponse&gt;，每个元素包含一个 token chunk。
+     * SSE 端点消费此 Flux，实现浏览器侧的实时 token 渲染（首字延迟 &lt; 200ms）。
      */
     @Override
     public Flux<String> streamTokens(String systemPrompt, String userPrompt) {
@@ -107,8 +106,8 @@ public class SpringAiLlmClient implements LlmClient {
     }
 
     /**
-     * Fallback Chain：主模型熔断时返回的降级响应。
-     * 生产场景应在此切换到备用模型（如 DeepSeek → Qwen → 本地 Ollama）。
+     * Fallback：主模型不可用时的降级响应。
+     * 生产场景应在此切换到备用模型（DeepSeek → Qwen → 本地 Ollama）。
      */
     private String completeFallback(Throwable throwable) {
         log.warn("[Fallback] 使用降级响应，原因: {}", throwable.getMessage());

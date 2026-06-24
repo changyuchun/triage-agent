@@ -4,7 +4,7 @@ import com.cyc.cyctest.agent.core.AgentModels.AgentRunContext;
 import com.cyc.cyctest.agent.core.AgentModels.Evidence;
 import com.cyc.cyctest.agent.llm.JsonSupport;
 import com.cyc.cyctest.agent.llm.LlmClient;
-import com.cyc.cyctest.agent.skill.DomainSkillLoader;
+import com.cyc.cyctest.agent.skill.SkillRegistry;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -14,12 +14,12 @@ import java.util.stream.Collectors;
 public class AnswerSynthesizer {
     private final LlmClient llmClient;
     private final JsonSupport jsonSupport;
-    private final DomainSkillLoader skillLoader;
+    private final SkillRegistry skillRegistry;
 
-    public AnswerSynthesizer(LlmClient llmClient, JsonSupport jsonSupport, DomainSkillLoader skillLoader) {
+    public AnswerSynthesizer(LlmClient llmClient, JsonSupport jsonSupport, SkillRegistry skillRegistry) {
         this.llmClient = llmClient;
         this.jsonSupport = jsonSupport;
-        this.skillLoader = skillLoader;
+        this.skillRegistry = skillRegistry;
     }
 
     /**
@@ -33,7 +33,9 @@ public class AnswerSynthesizer {
             return templateAnswer(ctx);
         }
         String domainCode = ctx.route() != null ? ctx.route().domainCode() : "";
-        String domainSop = skillLoader.sopFor(domainCode);
+        String subDomainCode = ctx.route() != null ? ctx.route().subDomainCode() : "";
+        // 精确子域 SOP 优先（pay_diagnosis 诊断SOP > payment 通用SOP）
+        String domainSop = skillRegistry.sopFor(domainCode, subDomainCode);
         String sopSection = domainSop.isBlank() ? "" : "\n\n领域诊断 SOP（按此标准回答，不得偏离）：\n" + domainSop;
         String system = """
                 你是基础平台智能答疑 Agent 的答案合成模块。

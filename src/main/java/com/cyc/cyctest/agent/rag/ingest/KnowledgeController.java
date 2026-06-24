@@ -8,16 +8,14 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * 知识库管理 REST API。
  * <p>
  * 支持格式：
- * - 文件上传（.txt / .md / .pdf）  POST /api/knowledge/upload
+ * - 文件上传（Tika 自动检测：PDF / Office / HTML / CSV / TXT / MD 等）  POST /api/knowledge/upload
  * - 纯文本提交                      POST /api/knowledge/upload-text
  * - 文档列表                        GET  /api/knowledge/documents
  * - 删除文档                        DELETE /api/knowledge/documents/{docId}
@@ -26,9 +24,6 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/knowledge")
 public class KnowledgeController {
-
-    private static final Set<String> PDF_EXTENSIONS = Set.of(".pdf");
-    private static final Set<String> TEXT_EXTENSIONS = Set.of(".txt", ".md", ".text", ".markdown");
 
     private final DocumentIngestionService ingestionService;
     private final KnowledgeRetriever knowledgeRetriever;
@@ -40,7 +35,7 @@ public class KnowledgeController {
     }
 
     /**
-     * 上传并索引文档（支持 .txt / .md / .pdf）。
+     * 上传并索引文档。
      */
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> upload(
@@ -49,18 +44,8 @@ public class KnowledgeController {
             @RequestParam(value = "subDomain", defaultValue = "general") String subDomain) {
         try {
             String filename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "untitled";
-            String ext = getExtension(filename).toLowerCase();
-            DocumentIngestionService.IndexedDocument doc;
-
-            if (PDF_EXTENSIONS.contains(ext)) {
-                doc = ingestionService.ingestPdf(filename, file.getBytes(), domain, subDomain);
-            } else if (TEXT_EXTENSIONS.contains(ext) || ext.isEmpty()) {
-                String content = new String(file.getBytes(), StandardCharsets.UTF_8);
-                doc = ingestionService.ingest(filename, content, domain, subDomain);
-            } else {
-                return Map.of("success", false, "message",
-                        "不支持的文件格式 " + ext + "，支持：.txt .md .pdf");
-            }
+            DocumentIngestionService.IndexedDocument doc =
+                    ingestionService.ingestFile(filename, file.getBytes(), domain, subDomain);
 
             return Map.of(
                     "success", true,
@@ -68,6 +53,7 @@ public class KnowledgeController {
                     "filename", doc.filename(),
                     "chunks", doc.chunkCount(),
                     "format", doc.format(),
+                    "checksum", doc.checksum(),
                     "message", "文档已索引，共 " + doc.chunkCount() + " 个分块"
             );
         } catch (IOException e) {
@@ -97,6 +83,7 @@ public class KnowledgeController {
                 "docId", doc.docId(),
                 "filename", doc.filename(),
                 "chunks", doc.chunkCount(),
+                "checksum", doc.checksum(),
                 "message", "文本已索引，共 " + doc.chunkCount() + " 个分块"
         );
     }
@@ -135,11 +122,6 @@ public class KnowledgeController {
                         c.metadata() != null ? String.valueOf(c.metadata().getOrDefault("source", "")) : ""
                 ))
                 .toList();
-    }
-
-    private static String getExtension(String filename) {
-        int lastDot = filename.lastIndexOf('.');
-        return lastDot >= 0 ? filename.substring(lastDot) : "";
     }
 
     public record SearchResult(

@@ -164,6 +164,17 @@ public class AgentRuntime implements IAgentRuntime {
         memory.currentRoute(route);
         memoryStore.save(memory);
         if ("clarify_required".equals(route.handleMode())) {
+            // 澄清次数已达上限时强制放行，避免 ROUTE→CLARIFY→EXTRACT→ROUTE 死循环
+            if (memory.clarifyCount() >= properties.runtime().maxClarifyRounds()) {
+                RouteResult forced = new RouteResult(
+                        route.domainCode(), route.domainName(),
+                        route.subDomainCode(), route.subDomainName(),
+                        "knowledge_and_tool", route.confidence(),
+                        "forced: max clarify rounds reached");
+                return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), forced, ctx.plan(),
+                        ctx.evidence(), AgentState.PLAN, ctx.retryCount(), ctx.finalAnswer(), ctx.clarifyQuestion(), ctx.trace())
+                        .withState(AgentState.PLAN, "forced route after max clarify");
+            }
             String answer = "这个问题可能涉及多个领域，请确认你要排查的是支付、交易、履约还是营销？";
             return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), route, ctx.plan(),
                     ctx.evidence(), AgentState.CLARIFY, ctx.retryCount(), answer, answer, ctx.trace())
