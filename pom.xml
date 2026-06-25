@@ -47,12 +47,11 @@
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
 		</dependency>
-		<!-- MCP Client：接入外部 MCP Server（按需开启，同时设置 agent.mcp.client.enabled=true）
+		<!-- MCP Client：接入外部 MCP Server -->
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-mcp-client</artifactId>
 		</dependency>
-		-->
 
 		<!-- ===== Spring AI Alibaba Graph（StateGraph 状态机引擎）===== -->
 		<dependency>

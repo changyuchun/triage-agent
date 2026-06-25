@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Skill 管理控制台</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .admin { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+    .skill-list { border-right: 1px solid var(--line); background: #fbfbfc; display: flex; flex-direction: column; }
+    .skill-list header { padding: 18px; border-bottom: 1px solid var(--line); }
+    .skill-list header .brand { margin-bottom: 10px; }
+    .skill-list header .nav { font-size: 13px; }
+    .skill-list header .nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+    #skillItems { flex: 1; overflow: auto; padding: 10px; }
+    .skill-item {
+      padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--line);
+      border-radius: 8px; background: white; cursor: pointer; display: flex;
+      justify-content: space-between; align-items: center;
+    }
+    .skill-item:hover { border-color: var(--accent); }
+    .skill-item.active { border-color: var(--accent); background: var(--soft); }
+    .skill-item .name { font-size: 14px; font-weight: 600; }
+    .skill-item .desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .source-badge {
+      font-size: 11px; padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+    }
+    .source-badge.classpath { background: #f0f0f0; color: #666; border: 1px solid #d0d0d0; }
+    .source-badge.filesystem { background: #e8f4f2; color: var(--accent); border: 1px solid #b9d8d3; }
+    .editor-pane { display: flex; flex-direction: column; }
+    .editor-pane header { padding: 16px 22px; border-bottom: 1px solid var(--line); background: var(--panel); display: flex; justify-content: space-between; align-items: center; }
+    .editor-pane header h1 { font-size: 18px; }
+    .editor-pane header p { margin-top: 4px; font-size: 13px; color: var(--muted); }
+    .editor-body { flex: 1; display: flex; flex-direction: column; padding: 20px 22px; gap: 12px; overflow: auto; }
+    .editor-body textarea { flex: 1; min-height: 400px; font-family: "Menlo", "Consolas", monospace; font-size: 13px; resize: vertical; }
+    .toolbar { display: flex; gap: 10px; align-items: center; }
+    .btn-danger { background: #d94f4f; }
+    .btn-secondary { background: white; color: var(--text); border: 1px solid var(--line); }
+    .btn-secondary:hover { border-color: var(--accent); }
+    .new-form { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+    .new-form label { font-size: 13px; color: var(--muted); margin-bottom: 2px; display: block; }
+    .new-form input { width: 100%; }
+    .toast {
+      position: fixed; bottom: 24px; right: 24px; padding: 12px 18px;
+      background: var(--text); color: white; border-radius: 8px; font-size: 14px;
+      opacity: 0; transition: opacity .25s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .empty { color: var(--muted); font-size: 13px; padding: 20px; text-align: center; }
+    @media (max-width: 900px) {
+      .admin { grid-template-columns: 1fr; }
+      .skill-list { height: 42vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+<div class="admin">
+  <!-- 左侧：Skill 列表 -->
+  <div class="skill-list">
+    <header>
+      <div class="brand">Skill 管理控制台</div>
+      <div class="nav">
+        <a href="/">💬 对话</a>
+        <a href="/knowledge.html">📚 知识库</a>
+      </div>
+      <button id="btnNew" style="margin-top:10px;width:100%">+ 新建 Skill</button>
+    </header>
+    <div id="skillItems"><div class="empty">加载中…</div></div>
+  </div>
+
+  <!-- 右侧：编辑区 -->
+  <div class="editor-pane">
+    <header>
+      <div>
+        <h1 id="editorTitle">选择一个 Skill</h1>
+        <p id="editorMeta">从左侧列表选择 Skill 查看或编辑</p>
+      </div>
+      <div class="toolbar" id="editorToolbar" style="display:none">
+        <button class="btn-secondary" id="btnCancel">取消</button>
+        <button id="btnSave">保存</button>
+        <button class="btn-danger" id="btnDelete">删除</button>
+      </div>
+    </header>
+    <div class="editor-body">
+      <!-- 新建表单（默认隐藏）-->
+      <div class="new-form" id="newForm" style="display:none">
+        <div>
+          <label>Skill 名称（小写字母 + 数字 + 连字符，如 payment-timeout）</label>
+          <input id="newName" placeholder="my-skill-name" autocomplete="off">
+        </div>
+        <div>
+          <label>SKILL.md 内容</label>
+          <textarea id="newContent" rows="20" placeholder="---
+name: my-skill-name
+description: 技能描述
+domain: payment
+sub_domain: timeout
+activate_when: 支付超时排查
+tool_flow: payment_query → log_query
+---
+
+## SOP
+
+1. 步骤一
+2. 步骤二"></textarea>
+        </div>
+        <div class="toolbar">
+          <button class="btn-secondary" id="btnCancelNew">取消</button>
+          <button id="btnCreate">创建</button>
+        </div>
+      </div>
+      <!-- 编辑区 -->
+      <textarea id="editorContent" rows="30" style="display:none" spellcheck="false"></textarea>
+      <div id="placeholder" class="empty" style="margin-top:80px">← 从左侧选择 Skill 开始编辑</div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/admin/skills';
+let current = null; // { name, source }
+
+async function loadList() {
+  const res = await fetch(API);
+  const skills = await res.json();
+  const el = document.getElementById('skillItems');
+  if (!skills.length) { el.innerHTML = '<div class="empty">暂无 Skill</div>'; return; }
+  el.innerHTML = skills.map(s => `
+    <div class="skill-item" data-name="${s.name}" data-source="${s.source}" onclick="selectSkill('${s.name}','${s.source}')">
+      <div>
+        <div class="name">${s.name}</div>
+        <div class="desc">${s.description || s.subDomain || ''}</div>
+      </div>
+      <span class="source-badge ${s.source}">${s.source === 'classpath' ? '内置' : '自定义'}</span>
+    </div>
+  `).join('');
+  if (current) {
+    document.querySelectorAll('.skill-item').forEach(el => {
+      if (el.dataset.name === current.name) el.classList.add('active');
+    });
+  }
+}
+
+async function selectSkill(name, source) {
+  hideNewForm();
+  current = { name, source };
+  document.querySelectorAll('.skill-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`.skill-item[data-name="${name}"]`)?.classList.add('active');
+
+  document.getElementById('editorTitle').textContent = name;
+  document.getElementById('editorMeta').textContent = `来源：${source === 'classpath' ? '内置（只读可查看，不可删除）' : '自定义（可编辑/删除）'}`;
+  document.getElementById('editorToolbar').style.display = 'flex';
+  document.getElementById('placeholder').style.display = 'none';
+  document.getElementById('editorContent').style.display = 'block';
+
+  const btnSave = document.getElementById('btnSave');
+  const btnDelete = document.getElementById('btnDelete');
+  const editorContent = document.getElementById('editorContent');
+
+  if (source === 'classpath') {
+    btnSave.disabled = true;
+    btnDelete.disabled = true;
+    btnSave.title = '内置 Skill 不可编辑';
+    btnDelete.title = '内置 Skill 不可删除';
+  } else {
+    btnSave.disabled = false;
+    btnDelete.disabled = false;
+    btnSave.title = '';
+    btnDelete.title = '';
+  }
+
+  editorContent.value = '加载中…';
+  const res = await fetch(`${API}/${encodeURIComponent(name)}`);
+  editorContent.value = res.ok ? await res.text() : '加载失败';
+}
+
+async function saveSkill() {
+  if (!current || current.source === 'classpath') return;
+  const content = document.getElementById('editorContent').value;
+  const res = await fetch(`${API}/${encodeURIComponent(current.name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content })
+  });
+  const data = await res.json();
+  toast(res.ok ? '✅ 已保存' : '❌ ' + (data.error || '保存失败'));
+}
+
+async function deleteSkill() {
+  if (!current || current.source === 'classpath') return;
+  if (!confirm(`确认删除 Skill「${current.name}」？此操作不可恢复。`)) return;
+  const res = await fetch(`${API}/${encodeURIComponent(current.name)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (res.ok) {
+    toast('✅ 已删除');
+    current = null;
+    resetEditor();
+    await loadList();
+  } else {
+    toast('❌ ' + (data.error || '删除失败'));
+  }
+}
+
+async function createSkill() {
+  const name = document.getElementById('newName').value.trim();
+  const content = document.getElementById('newContent').value;
+  if (!name || !content) { toast('❌ 名称和内容不能为空'); return; }
+  const res = await fetch(API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, content })
+  });
+  const data = await res.json();
+  if (res.ok) {
+    toast('✅ 创建成功');
+    hideNewForm();
+    await loadList();
+    selectSkill(name, 'filesystem');
+  } else {
+    toast('❌ ' + (data.error || '创建失败'));
+  }
+}
+
+function showNewForm() {
+  resetEditor();
+  document.getElementById('newForm').style.display = 'flex';
+  document.getElementById('placeholder').style.display = 'none';
+  document.getElementById('newName').value = '';
+  document.getElementById('newContent').value = '';
+  document.querySelectorAll('.skill-item').forEach(el => el.classList.remove('active'));
+  current = null;
+}
+
+function hideNewForm() {
+  document.getElementById('newForm').style.display = 'none';
+}
+
+function resetEditor() {
+  document.getElementById('editorTitle').textContent = '选择一个 Skill';
+  document.getElementById('editorMeta').textContent = '从左侧列表选择 Skill 查看或编辑';
+  document.getElementById('editorToolbar').style.display = 'none';
+  document.getElementById('editorContent').style.display = 'none';
+  document.getElementById('editorContent').value = '';
+  document.getElementById('placeholder').style.display = 'block';
+  hideNewForm();
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+document.getElementById('btnNew').onclick = showNewForm;
+document.getElementById('btnCreate').onclick = createSkill;
+document.getElementById('btnCancelNew').onclick = () => { hideNewForm(); document.getElementById('placeholder').style.display = 'block'; };
+document.getElementById('btnSave').onclick = saveSkill;
+document.getElementById('btnDelete').onclick = deleteSkill;
+document.getElementById('btnCancel').onclick = resetEditor;
+
+// 初始加载
+loadList();
+</script>
+</body>
+</html>

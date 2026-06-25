@@ -84,6 +84,21 @@ public class SkillRegistry {
         return Collections.unmodifiableList(result);
     }
 
+    public Optional<SkillMetadata> findByName(String name) {
+        if (name == null) return Optional.empty();
+        return metaByKey.values().stream()
+                .filter(m -> name.equals(m.name()))
+                .findFirst()
+                .or(() -> crossDomainMeta != null && name.equals(crossDomainMeta.name())
+                        ? Optional.of(crossDomainMeta) : Optional.empty());
+    }
+
+    public List<SkillMetadata> allSkills() {
+        List<SkillMetadata> all = new ArrayList<>(metaByKey.values());
+        if (crossDomainMeta != null) all.add(crossDomainMeta);
+        return Collections.unmodifiableList(all);
+    }
+
     /**
      * 返回当前领域+子域下所有 SkillMetadata（不校验激活条件），
      * 供 llmPlan() 把工具定义和 tool_flow 给 LLM 参考。
