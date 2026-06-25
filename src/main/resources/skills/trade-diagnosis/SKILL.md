@@ -3,7 +3,10 @@ name: trade-diagnosis
 description: 交易域诊断技能，覆盖库存锁定失败、履约异常、订单关闭、超卖等核心问题的排查 SOP
 
 domain: trade
+domain_name: 交易域
+domain_description: 处理订单、生单、购物车、履约、退款、取消、逆向售后等问题。
 sub_domain: trade_diagnosis
+sub_domain_name: 交易异常排查
 
 activate_when:
   domain: trade

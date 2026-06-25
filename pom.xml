@@ -94,6 +94,13 @@
 			<artifactId>jackson-datatype-jsr310</artifactId>
 		</dependency>
 
+		<!-- ===== MyBatis（仅用于源码阅读）===== -->
+		<dependency>
+			<groupId>org.mybatis</groupId>
+			<artifactId>mybatis</artifactId>
+			<version>3.5.16</version>
+		</dependency>
+
 		<!-- ===== 工具 ===== -->
 		<dependency>
 			<groupId>org.projectlombok</groupId>

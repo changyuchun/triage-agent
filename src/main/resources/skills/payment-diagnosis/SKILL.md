@@ -3,7 +3,10 @@ name: payment-diagnosis
 description: 支付域诊断技能，覆盖渠道超时、风控拦截、余额不足、重复支付等核心错误码的排查 SOP
 
 domain: payment
+domain_name: 支付域
+domain_description: 处理支付单、扣款、支付渠道、风控拒绝、支付状态、渠道流水等问题。
 sub_domain: pay_diagnosis
+sub_domain_name: 支付失败排查
 
 activate_when:
   domain: payment

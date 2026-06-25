@@ -25,13 +25,20 @@ public class ReactPlanNode extends ReactAgentNode {
     @Override
     protected String buildSystemPrompt() {
         return """
-                你是任务规划专家。根据路由结果和可用工具，制定执行步骤列表。
+                你是任务规划专家。根据路由结果、可用工具和诊断 SOP，制定执行步骤列表。
                 只输出 JSON，格式如下：
                 {"steps":[
-                  {"stepId":"step1","type":"TOOL_CALL","toolCode":"payment_query","query":"查询支付订单","dependsOn":[],"required":true},
-                  {"stepId":"step2","type":"TOOL_CALL","toolCode":"log_query","query":"查询错误日志","dependsOn":["step1"],"required":false}
+                  {"stepId":"knowledge_1","type":"KNOWLEDGE_RETRIEVE","query":"...","dependsOn":[],"required":false},
+                  {"stepId":"payment_query_step","type":"TOOL_CALL","toolCode":"payment_query",
+                   "args":{"payOrderId":"${slots.payOrderId}","env":"${slots.env}"},
+                   "dependsOn":[],"required":true},
+                  {"stepId":"log_query_step","type":"TOOL_CALL","toolCode":"log_query",
+                   "args":{"keyword":"${payment_query_step.errorCode}","timeRange":"1h"},
+                   "dependsOn":["payment_query_step"],"required":false,
+                   "condition":"${payment_query_step.status} == FAILED"}
                 ]}
-                type 只能是 TOOL_CALL 或 KNOWLEDGE_RETRIEVE。
+                规则：type 只能是 TOOL_CALL 或 KNOWLEDGE_RETRIEVE；args 用 ${slots.field} 引用槽位，
+                用 ${stepId.field} 引用前置步骤结果；condition 不满足时跳过该步骤。
                 """;
     }
 
@@ -48,11 +55,14 @@ public class ReactPlanNode extends ReactAgentNode {
               .append(" subDomain=").append(route.subDomainCode())
               .append(" handleMode=").append(route.handleMode()).append("\n");
 
-            // 提供 Skill 的 tool_flow 作为规划参考
             skillRegistry.findByDomain(route.domainCode(), route.subDomainCode()).forEach(meta -> {
                 if (!meta.toolFlow().isEmpty()) {
                     sb.append("参考工具流程（").append(meta.name()).append("）：\n");
                     sb.append(meta.toolFlowSummary());
+                }
+                if (!meta.sopSummary().isBlank()) {
+                    sb.append("诊断 SOP 摘要（据此生成条件分支）：\n");
+                    sb.append(meta.sopSummary()).append("\n");
                 }
             });
         }

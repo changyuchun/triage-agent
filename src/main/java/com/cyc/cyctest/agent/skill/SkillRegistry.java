@@ -194,6 +194,9 @@ public class SkillRegistry {
             String description = str(fm, "description");
             String domain = str(fm, "domain");
             String subDomain = str(fm, "sub_domain");
+            String domainName = str(fm, "domain_name");
+            String subDomainName = str(fm, "sub_domain_name");
+            String domainDescription = str(fm, "domain_description");
             boolean requiresKnowledge = Boolean.TRUE.equals(fm.get("requires_knowledge"));
 
             if (domain == null) {
@@ -236,6 +239,7 @@ public class SkillRegistry {
             }
 
             SkillMetadata meta = new SkillMetadata(name, description, domain, subDomain,
+                    domainName, subDomainName, domainDescription,
                     "*".equals(domain), requiresKnowledge, activationRule, toolFlow, body);
 
             if ("*".equals(domain)) {

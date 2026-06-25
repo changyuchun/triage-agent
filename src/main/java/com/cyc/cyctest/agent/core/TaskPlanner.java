@@ -53,6 +53,7 @@ public class TaskPlanner {
                 route.domainCode(), route.subDomainCode());
         String toolFlowHint = buildToolFlowHint(route.domainCode(), route.subDomainCode());
 
+        String sopHint = buildSopHint(route.domainCode(), route.subDomainCode());
         String system = "你是 Agent 任务规划模块。你只输出 JSON，不能解释。";
         String user = """
                 根据用户问题、槽位、领域路由和可用工具，生成执行计划（DAG）。
@@ -61,14 +62,17 @@ public class TaskPlanner {
                 2. toolCode 只能从"当前领域可用工具"中选择。
                 3. TOOL_CALL 步骤必须填写 args（从槽位精确提取，只填有值的参数）。
                 4. 如果工具有依赖关系（先查状态再查日志），用 dependsOn 字段声明前置步骤 ID。
-                5. 查询/排查类优先 tool + knowledge；解释类只用 knowledge。
-                6. 不要生成写操作。
+                5. 条件步骤用 condition 字段（如 "${payment_query_step.status} == FAILED"），不满足时跳过。
+                6. 查询/排查类优先 tool + knowledge；解释类只用 knowledge。
+                7. 不要生成写操作。
 
                 用户问题: %s
                 槽位: %s
                 路由: domain=%s subDomain=%s handleMode=%s
                 当前领域可用工具: %s
                 推荐调用顺序（参考，可根据槽位调整）:
+                %s
+                诊断规则摘要（理解业务条件，据此生成条件分支）:
                 %s
                 输出 JSON:
                 {"steps":[
@@ -77,13 +81,15 @@ public class TaskPlanner {
                    "args":{"payOrderId":"P001","env":"PROD"},"dependsOn":[],"required":true},
                   {"stepId":"log_query_step","type":"TOOL_CALL","toolCode":"log_query",
                    "args":{"keyword":"${payment_query_step.errorCode}","timeRange":"1h"},
-                   "dependsOn":["payment_query_step"],"required":false}
+                   "dependsOn":["payment_query_step"],"required":false,
+                   "condition":"${payment_query_step.status} == FAILED"}
                 ]}
                 """.formatted(
                 userText, slots,
                 route.domainCode(), route.subDomainCode(), route.handleMode(),
                 jsonSupport.write(toolDefs),
-                toolFlowHint.isBlank() ? "（无推荐顺序，由 LLM 自行决定）" : toolFlowHint);
+                toolFlowHint.isBlank() ? "（无推荐顺序，由 LLM 自行决定）" : toolFlowHint,
+                sopHint.isBlank() ? "（无诊断摘要）" : sopHint);
         return jsonSupport.readJsonObject(llmClient.complete(system, user), ExecutionPlan.class);
     }
 
@@ -165,6 +171,18 @@ public class TaskPlanner {
             String summary = meta.toolFlowSummary();
             if (!summary.isBlank()) {
                 sb.append("# ").append(meta.name()).append("\n").append(summary);
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 构建 SOP 诊断摘要注入 Planner prompt，帮助 LLM 理解条件分支业务逻辑。 */
+    private String buildSopHint(String domain, String subDomain) {
+        StringBuilder sb = new StringBuilder();
+        for (SkillMetadata meta : skillRegistry.findByDomain(domain, subDomain)) {
+            String summary = meta.sopSummary();
+            if (!summary.isBlank()) {
+                sb.append("# ").append(meta.name()).append("\n").append(summary).append("\n");
             }
         }
         return sb.toString();
