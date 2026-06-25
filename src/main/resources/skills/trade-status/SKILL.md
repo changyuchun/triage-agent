@@ -18,12 +18,7 @@ activate_when:
 requires_knowledge: false
 
 tool_flow:
-  - stepId: trade_query_step
-    toolCode: trade_query
-    args:
-      orderId: "${slots.orderId}"
-      env: "${slots.env}"
-    required: true
+  - trade_query
 ---
 
 # 订单状态查询指南

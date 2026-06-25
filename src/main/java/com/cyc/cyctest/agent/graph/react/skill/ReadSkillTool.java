@@ -35,10 +35,10 @@ public class ReadSkillTool {
         sb.append("# ").append(meta.name()).append("\n\n");
         sb.append("**描述**: ").append(meta.description()).append("\n\n");
 
-        if (!meta.toolFlow().isEmpty()) {
-            sb.append("## 工具调用流程（tool_flow）\n\n");
-            sb.append("按以下顺序调用工具：\n");
-            sb.append(meta.toolFlowSummary()).append("\n");
+        if (!meta.tools().isEmpty()) {
+            sb.append("## 可用工具\n\n");
+            meta.tools().forEach(t -> sb.append("- ").append(t).append("\n"));
+            sb.append("\n");
         }
 
         if (meta.sopContent() != null && !meta.sopContent().isBlank()) {

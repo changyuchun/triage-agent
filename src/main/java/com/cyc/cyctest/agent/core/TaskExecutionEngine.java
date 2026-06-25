@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -73,18 +74,22 @@ public class TaskExecutionEngine {
 
             if (runnable.isEmpty()) continue;
 
-            // 同层并行执行
+            // 同层并行执行（带超时保护）
+            int timeoutMs = properties.runtime().toolTimeoutMs();
             List<CompletableFuture<Map.Entry<String, ToolExecutionResult>>> futures =
                     runnable.stream()
-                            .map(step -> CompletableFuture.supplyAsync(() -> {
-                                // 变量替换：${payment_query_step.errorCode} → 实际值
-                                Map<String, Object> resolvedArgs = resultCtx.resolveArgs(step.args());
-                                // Slot 全量兜底（确保工具参数有默认值）
-                                Map<String, Object> merged = slotDefaults(slots);
-                                merged.putAll(resolvedArgs);
-                                ToolExecutionResult result = callTool(step.toolCode(), merged);
-                                return Map.entry(step.stepId(), result);
-                            }))
+                            .map(step -> CompletableFuture
+                                    .supplyAsync(() -> {
+                                        Map<String, Object> resolvedArgs = resultCtx.resolveArgs(step.args());
+                                        Map<String, Object> merged = slotDefaults(slots);
+                                        merged.putAll(resolvedArgs);
+                                        ToolExecutionResult result = callToolWithRetry(step.toolCode(), merged);
+                                        return Map.entry(step.stepId(), result);
+                                    })
+                                    .orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                                    .exceptionally(ex -> Map.entry(step.stepId(),
+                                            ToolExecutionResult.failed("TOOL_TIMEOUT",
+                                                    "工具调用超时（>" + timeoutMs + "ms）: " + step.toolCode()))))
                             .toList();
 
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
@@ -137,13 +142,36 @@ public class TaskExecutionEngine {
         return layers;
     }
 
+    /**
+     * 带重试的工具调用。
+     * TOOL_NOT_FOUND / TOOL_PARAM_MISSING 属于配置错误，不重试。
+     * TOOL_EXCEPTION 属于瞬时异常，按指数退避重试（200ms, 400ms, ...）。
+     */
+    private ToolExecutionResult callToolWithRetry(String toolCode, Map<String, Object> args) {
+        int maxRetries = properties.runtime().maxToolRetries();
+        ToolExecutionResult result = null;
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(200L * attempt); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            result = callTool(toolCode, args);
+            if (result.success()) return result;
+            // 配置类错误不重试
+            String code = String.valueOf(result.errorCode());
+            if ("TOOL_NOT_FOUND".equals(code) || "TOOL_PARAM_MISSING".equals(code)) break;
+        }
+        return result != null ? result : ToolExecutionResult.failed("TOOL_FAILED", "工具调用失败");
+    }
+
     private ToolExecutionResult callTool(String toolCode, Map<String, Object> args) {
         Optional<AiTool> tool = skillRegistry.toolFor(toolCode);
         if (tool.isEmpty()) {
             return ToolExecutionResult.failed("TOOL_NOT_FOUND", "未注册工具: " + toolCode);
         }
         AiTool t = tool.get();
-        // 必填参数校验
         for (String required : t.definition().requiredFields()) {
             Object v = args.get(required);
             if (v == null || v.toString().isBlank()) {
@@ -176,10 +204,10 @@ public class TaskExecutionEngine {
 
     private Evidence toEvidence(String stepId, ToolExecutionResult result) {
         if (result.success()) {
-            return new Evidence("tool_" + stepId, "tool",
+            return new Evidence(stepId, "tool",
                     result.title(), result.summary(), 1.0, result.data());
         }
-        return new Evidence("tool_" + stepId, "tool_error",
+        return new Evidence(stepId, "tool_error",
                 result.title(), result.errorMessage(), 0.1,
                 Map.of("errorCode", String.valueOf(result.errorCode())));
     }

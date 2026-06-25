@@ -20,25 +20,8 @@ activate_when:
 requires_knowledge: true
 
 tool_flow:
-  - stepId: marketing_query_step
-    toolCode: marketing_query
-    args:
-      orderId: "${slots.orderId}"
-      activityId: "${slots.activityId}"
-      couponId: "${slots.couponId}"
-      env: "${slots.env}"
-    required: true
-
-  - stepId: log_query_step
-    toolCode: log_query
-    args:
-      keyword: "${marketing_query_step.errorCode}"
-      timeRange: "1h"
-      level: ERROR
-    dependsOn:
-      - marketing_query_step
-    condition: "${marketing_query_step.status} == FAILED"
-    required: false
+  - marketing_query
+  - log_query
 ---
 
 # 营销域诊断 SOP

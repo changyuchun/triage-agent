@@ -20,23 +20,8 @@ activate_when:
 requires_knowledge: true
 
 tool_flow:
-  - stepId: payment_query_step
-    toolCode: payment_query
-    args:
-      payOrderId: "${slots.payOrderId}"
-      env: "${slots.env}"
-    required: true
-
-  - stepId: log_query_step
-    toolCode: log_query
-    args:
-      keyword: "${payment_query_step.errorCode}"
-      timeRange: "1h"
-      level: ERROR
-    dependsOn:
-      - payment_query_step
-    condition: "${payment_query_step.status} == FAILED"
-    required: false
+  - payment_query
+  - log_query
 ---
 
 # 支付域诊断 SOP

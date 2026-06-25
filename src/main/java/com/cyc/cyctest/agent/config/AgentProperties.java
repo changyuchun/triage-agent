@@ -14,7 +14,7 @@ public record AgentProperties(
                     "Qwen/Qwen2.5-7B-Instruct", 0.2, 4000);
         }
         if (runtime == null) {
-            runtime = new Runtime(2, 0.45, 60, 50, 30, 8);
+            runtime = new Runtime(2, 0.45, 60, 50, 30, 8, 5000, 2);
         }
         if (memory == null) {
             memory = new Memory("in-memory", 7);
@@ -37,7 +37,9 @@ public record AgentProperties(
             int rrfRankConstant,
             int bm25TopK,
             int fusedTopK,
-            int finalTopK
+            int finalTopK,
+            int toolTimeoutMs,      // 单个工具调用超时毫秒，默认 5000
+            int maxToolRetries      // TOOL_EXCEPTION 时最大重试次数，默认 2
     ) {
     }
 

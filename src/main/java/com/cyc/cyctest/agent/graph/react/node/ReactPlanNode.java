@@ -29,16 +29,16 @@ public class ReactPlanNode extends ReactAgentNode {
                 只输出 JSON，格式如下：
                 {"steps":[
                   {"stepId":"knowledge_1","type":"KNOWLEDGE_RETRIEVE","query":"...","dependsOn":[],"required":false},
-                  {"stepId":"payment_query_step","type":"TOOL_CALL","toolCode":"payment_query",
+                  {"stepId":"payment_query","type":"TOOL_CALL","toolCode":"payment_query",
                    "args":{"payOrderId":"${slots.payOrderId}","env":"${slots.env}"},
                    "dependsOn":[],"required":true},
-                  {"stepId":"log_query_step","type":"TOOL_CALL","toolCode":"log_query",
-                   "args":{"keyword":"${payment_query_step.errorCode}","timeRange":"1h"},
-                   "dependsOn":["payment_query_step"],"required":false,
-                   "condition":"${payment_query_step.status} == FAILED"}
+                  {"stepId":"log_query","type":"TOOL_CALL","toolCode":"log_query",
+                   "args":{"keyword":"${payment_query.errorCode}","timeRange":"1h"},
+                   "dependsOn":["payment_query"],"required":false,
+                   "condition":"${payment_query.status} == FAILED"}
                 ]}
-                规则：type 只能是 TOOL_CALL 或 KNOWLEDGE_RETRIEVE；args 用 ${slots.field} 引用槽位，
-                用 ${stepId.field} 引用前置步骤结果；condition 不满足时跳过该步骤。
+                规则：stepId 统一用 toolCode；args 用 ${slots.field} 引用槽位，${stepId.field} 引用前置步骤字段；
+                dependsOn 和 condition 根据 SOP 的业务逻辑推断。
                 """;
     }
 
@@ -53,18 +53,23 @@ public class ReactPlanNode extends ReactAgentNode {
         if (route != null) {
             sb.append("路由：domain=").append(route.domainCode())
               .append(" subDomain=").append(route.subDomainCode())
-              .append(" handleMode=").append(route.handleMode()).append("\n");
+              .append(" handleMode=").append(route.handleMode()).append("\n\n");
 
-            skillRegistry.findByDomain(route.domainCode(), route.subDomainCode()).forEach(meta -> {
-                if (!meta.toolFlow().isEmpty()) {
-                    sb.append("参考工具流程（").append(meta.name()).append("）：\n");
-                    sb.append(meta.toolFlowSummary());
-                }
-                if (!meta.sopSummary().isBlank()) {
-                    sb.append("诊断 SOP 摘要（据此生成条件分支）：\n");
-                    sb.append(meta.sopSummary()).append("\n");
-                }
-            });
+            // 可用工具声明
+            List<com.cyc.cyctest.agent.tool.ToolModels.ToolDefinition> toolDefs =
+                    skillRegistry.toolDefinitionsFor(route.domainCode(), route.subDomainCode());
+            if (!toolDefs.isEmpty()) {
+                sb.append("可用工具：\n");
+                toolDefs.forEach(def -> sb.append("  - ").append(def.code())
+                        .append(": ").append(def.description()).append("\n"));
+                sb.append("\n");
+            }
+
+            // 完整 SOP（LLM 从中推断 dependsOn/condition/args）
+            String sop = skillRegistry.sopFor(route.domainCode(), route.subDomainCode());
+            if (!sop.isBlank()) {
+                sb.append("诊断 SOP（根据此 SOP 推断工具调用顺序、依赖和条件）：\n").append(sop).append("\n");
+            }
         }
         sb.append("槽位：").append(jsonSupport.write(slots));
         return sb.toString();

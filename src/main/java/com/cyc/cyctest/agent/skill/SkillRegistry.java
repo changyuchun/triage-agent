@@ -15,15 +15,9 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * 唯一 Skill 注册表——合并原 AgentSkillRegistry（Java 对象层）和 DomainSkillLoader（文件层）。
+ * 唯一 Skill 注册表。
  * <p>
- * 职责：
- * 1. 加载 classpath:skills/SLASH/SLASH/SKILL.md，解析 frontmatter → SkillMetadata
- * 2. 持有所有 AiTool 实现（Spring 自动注入），按 toolCode 索引
- * 3. 提供 findActivatable()、sopFor()、toolFlowFor() 供上层服务查询
- * <p>
- * SKILL.md 是单一真相来源：domain/subDomain/激活规则/工具流程/SOP 全在文件里，
- * AiTool Java 类只负责执行，不知道自己属于哪个领域。
+ * SKILL.md tool_flow 字段现在只是工具名列表（不含 DAG 结构），DAG 由 Plan 阶段 LLM 从 SOP 推断。
  */
 @Component
 public class SkillRegistry {
@@ -31,11 +25,9 @@ public class SkillRegistry {
     private static final Logger log = LoggerFactory.getLogger(SkillRegistry.class);
     private static final String DELIMITER = "---";
 
-    // key = "domain|subDomain" 或 "domain"，crossDomain 用 "*"
     private final Map<String, SkillMetadata> metaByKey = new LinkedHashMap<>();
     private SkillMetadata crossDomainMeta = null;
 
-    // toolCode → AiTool 执行实现
     private final Map<String, AiTool> toolByCode;
 
     public SkillRegistry(List<AiTool> tools) {
@@ -43,7 +35,7 @@ public class SkillRegistry {
                 .collect(Collectors.toMap(
                         t -> t.definition().code(),
                         t -> t,
-                        (a, b) -> a,        // 同 code 保留先注册的
+                        (a, b) -> a,
                         LinkedHashMap::new));
     }
 
@@ -65,10 +57,6 @@ public class SkillRegistry {
 
     // ── 规划层 ───────────────────────────────────────────────────────────
 
-    /**
-     * 返回当前路由和槽位下所有激活的 SkillMetadata。
-     * TaskPlanner.rulePlan() 用此列表构建工具步骤（直接用 tool_flow，不再硬编码）。
-     */
     public List<SkillMetadata> findActivatable(ActivationContext ctx) {
         List<SkillMetadata> result = new ArrayList<>();
         for (SkillMetadata meta : metaByKey.values()) {
@@ -76,7 +64,6 @@ public class SkillRegistry {
                 result.add(meta);
             }
         }
-        // 跨领域 Skill 单独判断（如 log-query）
         if (crossDomainMeta != null && crossDomainMeta.activationRule() != null
                 && crossDomainMeta.activationRule().matches(ctx)) {
             result.add(crossDomainMeta);
@@ -99,38 +86,27 @@ public class SkillRegistry {
         return Collections.unmodifiableList(all);
     }
 
-    /**
-     * 返回当前领域+子域下所有 SkillMetadata（不校验激活条件），
-     * 供 llmPlan() 把工具定义和 tool_flow 给 LLM 参考。
-     */
     public List<SkillMetadata> findByDomain(String domain, String subDomain) {
         List<SkillMetadata> result = new ArrayList<>();
-        // 精确子域匹配
         String subKey = (subDomain != null && !subDomain.isBlank()) ? domain + "|" + subDomain : null;
         if (subKey != null && metaByKey.containsKey(subKey)) {
             result.add(metaByKey.get(subKey));
         }
-        // 领域级匹配（无子域字段的 SKILL.md）
         if (metaByKey.containsKey(domain)) {
             result.add(metaByKey.get(domain));
         }
-        // 跨领域
         if (crossDomainMeta != null) {
             result.add(crossDomainMeta);
         }
         return Collections.unmodifiableList(result);
     }
 
-    /**
-     * 所有 tool_flow 里引用的 AiTool 定义，供 llmPlan() 把工具 schema 给 LLM。
-     */
+    /** 返回当前领域+子域下所有 skill 声明的工具定义，供 Plan 阶段注入 LLM prompt。 */
     public List<com.cyc.cyctest.agent.tool.ToolModels.ToolDefinition> toolDefinitionsFor(
             String domain, String subDomain) {
         Set<String> codes = new LinkedHashSet<>();
         for (SkillMetadata meta : findByDomain(domain, subDomain)) {
-            for (ToolFlowStep step : meta.toolFlow()) {
-                codes.add(step.toolCode());
-            }
+            codes.addAll(meta.tools());
         }
         return codes.stream()
                 .map(toolByCode::get)
@@ -141,10 +117,6 @@ public class SkillRegistry {
 
     // ── 合成层 ───────────────────────────────────────────────────────────
 
-    /**
-     * 返回指定领域+子域的 SOP 内容，只注入 AnswerSynthesizer 的 System Prompt。
-     * 查找优先级：精确子域 → 领域级 → 空；末尾附加跨领域 SOP。
-     */
     public String sopFor(String domain, String subDomain) {
         if (domain == null || domain.isBlank()) {
             return crossDomainMeta != null ? crossDomainMeta.sopContent() : "";
@@ -217,30 +189,25 @@ public class SkillRegistry {
                         awRequires);
             }
 
-            // 解析 tool_flow
-            List<ToolFlowStep> toolFlow = new ArrayList<>();
+            // 解析 tool_flow：新格式为字符串列表，向后兼容 Map 格式（只取 toolCode）
+            List<String> tools = new ArrayList<>();
             if (fm.containsKey("tool_flow")) {
-                List<Map<String, Object>> flowList = (List<Map<String, Object>>) fm.get("tool_flow");
-                if (flowList != null) {
-                    for (Map<String, Object> step : flowList) {
-                        String stepId = str(step, "stepId");
-                        String toolCode = str(step, "toolCode");
-                        if (stepId == null || toolCode == null) continue;
-                        Map<String, Object> rawArgs = step.containsKey("args")
-                                ? (Map<String, Object>) step.get("args") : Map.of();
-                        Map<String, String> args = new LinkedHashMap<>();
-                        rawArgs.forEach((k, v) -> args.put(k, String.valueOf(v)));
-                        List<String> dependsOn = toStringList(step.get("dependsOn"));
-                        String condition = str(step, "condition");
-                        boolean required = Boolean.TRUE.equals(step.get("required"));
-                        toolFlow.add(new ToolFlowStep(stepId, toolCode, args, dependsOn, condition, required));
+                Object rawFlow = fm.get("tool_flow");
+                if (rawFlow instanceof List<?> flowList) {
+                    for (Object item : flowList) {
+                        if (item instanceof String s) {
+                            tools.add(s);
+                        } else if (item instanceof Map<?, ?> stepMap) {
+                            Object tc = stepMap.get("toolCode");
+                            if (tc != null) tools.add(tc.toString());
+                        }
                     }
                 }
             }
 
             SkillMetadata meta = new SkillMetadata(name, description, domain, subDomain,
                     domainName, subDomainName, domainDescription,
-                    "*".equals(domain), requiresKnowledge, activationRule, toolFlow, body);
+                    "*".equals(domain), requiresKnowledge, activationRule, tools, body);
 
             if ("*".equals(domain)) {
                 crossDomainMeta = meta;
@@ -249,8 +216,8 @@ public class SkillRegistry {
             } else {
                 metaByKey.put(domain, meta);
             }
-            log.debug("SkillRegistry: 注册 skill={}, domain={}, subDomain={}, toolFlow={}步",
-                    name, domain, subDomain, toolFlow.size());
+            log.debug("SkillRegistry: 注册 skill={}, domain={}, subDomain={}, tools={}个",
+                    name, domain, subDomain, tools.size());
         } catch (Exception e) {
             log.warn("SkillRegistry: 解析 {} 失败: {}", resource.getFilename(), e.getMessage());
         }

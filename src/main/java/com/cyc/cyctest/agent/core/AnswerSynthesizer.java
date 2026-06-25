@@ -40,8 +40,9 @@ public class AnswerSynthesizer {
         String system = """
                 你是基础平台智能答疑 Agent 的答案合成模块。
                 严格基于证据回答，不要编造工具没有查到的事实。
-                输出结构：核心结论、关键事实、排查过程、建议、限制。
-                事实后标注 [ref:evidenceId]。%s
+                输出结构（必须包含以下五段，每段标题加粗）：
+                **核心结论** | **关键事实**（事实后标注 [ref:evidenceId]）| **排查过程** | **建议** | **限制**
+                控制在 600 字以内，不要重复证据原文。%s
                 """.formatted(sopSection);
 
         // 将情景记忆注入 Prompt：让 LLM 参考历史相似问题的处理结论

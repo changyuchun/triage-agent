@@ -18,13 +18,7 @@ activate_when:
 requires_knowledge: false
 
 tool_flow:
-  - stepId: marketing_query_step
-    toolCode: marketing_query
-    args:
-      orderId: "${slots.orderId}"
-      couponId: "${slots.couponId}"
-      env: "${slots.env}"
-    required: true
+  - marketing_query
 ---
 
 # 营销资格查询指南

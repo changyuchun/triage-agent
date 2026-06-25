@@ -18,12 +18,7 @@ activate_when:
 requires_knowledge: false
 
 tool_flow:
-  - stepId: payment_query_step
-    toolCode: payment_query
-    args:
-      payOrderId: "${slots.payOrderId}"
-      env: "${slots.env}"
-    required: true
+  - payment_query
 ---
 
 # 支付状态查询指南

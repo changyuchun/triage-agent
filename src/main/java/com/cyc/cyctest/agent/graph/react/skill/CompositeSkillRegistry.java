@@ -86,8 +86,10 @@ public class CompositeSkillRegistry implements com.alibaba.cloud.ai.graph.skills
         return projectRegistry.findByName(name)
                 .map(m -> {
                     StringBuilder sb = new StringBuilder();
-                    if (!m.toolFlow().isEmpty()) {
-                        sb.append("## 工具调用流程\n").append(m.toolFlowSummary()).append("\n");
+                    if (!m.tools().isEmpty()) {
+                        sb.append("## 可用工具\n");
+                        m.tools().forEach(t -> sb.append("- ").append(t).append("\n"));
+                        sb.append("\n");
                     }
                     if (m.sopContent() != null) sb.append("## SOP\n").append(m.sopContent());
                     return sb.toString();

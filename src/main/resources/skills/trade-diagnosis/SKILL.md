@@ -20,23 +20,8 @@ activate_when:
 requires_knowledge: true
 
 tool_flow:
-  - stepId: trade_query_step
-    toolCode: trade_query
-    args:
-      orderId: "${slots.orderId}"
-      env: "${slots.env}"
-    required: true
-
-  - stepId: log_query_step
-    toolCode: log_query
-    args:
-      keyword: "${trade_query_step.errorCode}"
-      timeRange: "1h"
-      level: ERROR
-    dependsOn:
-      - trade_query_step
-    condition: "${trade_query_step.status} == FAILED"
-    required: false
+  - trade_query
+  - log_query
 ---
 
 # 交易域诊断 SOP
