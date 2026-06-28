@@ -80,7 +80,7 @@ public class AgentRuntime implements IAgentRuntime {
 
     @Override
     public ChatResponse run(String sessionId, String userText) {
-        // Semantic Cache（L0）：相似问题直接命中缓存，跳过完整 Agent 循环，降低 LLM 调用成本
+        // L0 语义缓存：key=userText（确定性输入，稳定 embedding），仅 knowledge_only 答案会被写入
         Optional<String> cached = semanticCacheService.get(userText);
         if (cached.isPresent()) {
             ConversationContext mem = memoryStore.load(sessionId);
@@ -132,9 +132,8 @@ public class AgentRuntime implements IAgentRuntime {
         // 持久化到 Redis（生产模式）
         memoryStore.save(memory);
 
-        // Semantic Cache 写入：将 DONE 状态的答案写入语义缓存，供后续相似问题命中
         if (ctx.state() == AgentState.DONE && ctx.finalAnswer() != null) {
-            semanticCacheService.put(userText, ctx.finalAnswer());
+            putCacheIfEligible(ctx, ctx.finalAnswer());
         }
 
         boolean waiting = ctx.state() == AgentState.WAITING_USER_INPUT;
@@ -210,7 +209,7 @@ public class AgentRuntime implements IAgentRuntime {
         if (ctx.state() == AgentState.DONE) episodicMemoryService.recordEpisode(memory.sessionId(), ctx);
         memoryStore.save(memory);
         if (ctx.state() == AgentState.DONE && ctx.finalAnswer() != null) {
-            semanticCacheService.put(userText, ctx.finalAnswer());
+            putCacheIfEligible(ctx, ctx.finalAnswer());
         }
 
         boolean waiting = ctx.state() == AgentState.WAITING_USER_INPUT;
@@ -227,7 +226,7 @@ public class AgentRuntime implements IAgentRuntime {
     @Override
     public Flux<AgentProgressEvent> stream(String sessionId, String userText) {
         return Flux.<AgentProgressEvent>create(sink -> {
-            // L0 语义缓存命中：直接推送答案，跳过 pipeline
+            // L0 语义缓存
             Optional<String> cached = semanticCacheService.get(userText);
             if (cached.isPresent()) {
                 ConversationContext mem = memoryStore.load(sessionId);
@@ -294,7 +293,7 @@ public class AgentRuntime implements IAgentRuntime {
                                     episodicMemoryService.recordEpisode(
                                             memory.sessionId(), finalCtx.withFinalAnswer(answer));
                                     memoryStore.save(memory);
-                                    semanticCacheService.put(userText, answer);
+                                    putCacheIfEligible(finalCtx.withFinalAnswer(answer), answer);
                                     ChatResponse response = new ChatResponse(
                                             sessionId, AgentState.DONE.name(), false, null, null,
                                             answer, finalCtx.slots(), finalCtx.route(),
@@ -312,7 +311,7 @@ public class AgentRuntime implements IAgentRuntime {
                 }
                 memoryStore.save(memory);
                 if (ctx.state() == AgentState.DONE && ctx.finalAnswer() != null) {
-                    semanticCacheService.put(userText, ctx.finalAnswer());
+                    putCacheIfEligible(ctx, ctx.finalAnswer());
                 }
                 boolean waiting = ctx.state() == AgentState.WAITING_USER_INPUT;
                 ChatResponse response = new ChatResponse(
@@ -324,6 +323,17 @@ public class AgentRuntime implements IAgentRuntime {
                 sink.complete();
             }
         }).subscribeOn(Schedulers.boundedElastic());  // 阻塞的 pipeline 阶段跑在弹性线程池，不占用 HTTP 线程
+    }
+
+    /**
+     * 语义缓存写入：只缓存 knowledge_only 答案，用原始 userText 作 key。
+     * userText 确定性输入→确定性 embedding，hit 率高于 LLM 生成的 effectiveGoal（非确定）。
+     * 排除 tool_call / knowledge_and_tool 答案（含 slot 相关数据，跨会话命中必然错误）。
+     */
+    private void putCacheIfEligible(AgentRunContext ctx, String answer) {
+        if (ctx.route() != null && "knowledge_only".equals(ctx.route().handleMode())) {
+            semanticCacheService.put(ctx.userText(), answer);
+        }
     }
 
     private static String stageType(AgentState state) {

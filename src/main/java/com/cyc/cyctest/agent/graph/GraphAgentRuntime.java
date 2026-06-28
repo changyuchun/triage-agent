@@ -57,19 +57,18 @@ public class GraphAgentRuntime implements IAgentRuntime {
 
     @Override
     public ChatResponse run(String sessionId, String userText) {
+        // ---- 初始化：记录用户输入，加载历史槽位 ----
+        ConversationContext memory = memoryStore.load(sessionId);
+
         // ---- L0：语义缓存（跳过完整 Graph 执行）----
         Optional<String> cached = semanticCacheService.get(userText);
         if (cached.isPresent()) {
-            ConversationContext mem = memoryStore.load(sessionId);
-            mem.addTurn("user", userText);
-            mem.addTurn("assistant", "[CACHE] " + cached.get());
-            memoryStore.save(mem);
+            memory.addTurn("user", userText);
+            memory.addTurn("assistant", "[CACHE] " + cached.get());
+            memoryStore.save(memory);
             return new ChatResponse(sessionId, AgentState.DONE.name(), false, null, null,
                     cached.get(), null, null, List.of(), List.of("semantic_cache_hit"));
         }
-
-        // ---- 初始化：记录用户输入，加载历史槽位 ----
-        ConversationContext memory = memoryStore.load(sessionId);
         memory.addTurn("user", userText);
         memoryStore.save(memory);
 
@@ -105,8 +104,9 @@ public class GraphAgentRuntime implements IAgentRuntime {
         @SuppressWarnings("unchecked")
         List<String> trace = (List<String>) finalState.value(AgentStateKeys.TRACE).orElse(List.of());
 
-        // ---- L0 语义缓存写入 ----
-        if (!waiting && answer != null && !answer.isBlank()) {
+        // ---- L0 语义缓存写入：只缓存 knowledge_only 答案，tool 类答案含 slot 数据不应跨会话命中 ----
+        if (!waiting && answer != null && !answer.isBlank()
+                && route != null && "knowledge_only".equals(route.handleMode())) {
             semanticCacheService.put(userText, answer);
         }
 

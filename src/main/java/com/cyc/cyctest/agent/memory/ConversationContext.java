@@ -160,7 +160,8 @@ public class ConversationContext {
         structuredTurns.clear();
         structuredTurns.addAll(retained);
 
-        this.compressedTurnCount = 0;
+        // 设为已保留条数而非 0，保证下次压缩恰好在新增 compressEvery 条时触发
+        this.compressedTurnCount = structuredTurns.size();
     }
 
     // -------- 以下为原有方法，保持不变 --------
