@@ -2,7 +2,9 @@ package com.cyc.cyctest.agent.core;
 
 import com.cyc.cyctest.agent.cache.SemanticCacheService;
 import com.cyc.cyctest.agent.config.AgentProperties;
+import com.cyc.cyctest.agent.core.AgentModels.AgentProgressEvent;
 import com.cyc.cyctest.agent.core.AgentModels.AgentRunContext;
+import com.cyc.cyctest.agent.core.AgentModels.ProgressCallback;
 import com.cyc.cyctest.agent.core.AgentModels.AgentState;
 import com.cyc.cyctest.agent.core.AgentModels.ChatResponse;
 import com.cyc.cyctest.agent.core.AgentModels.ClarifyDecision;
@@ -17,6 +19,8 @@ import com.cyc.cyctest.agent.memory.MemoryCompressionService;
 import com.cyc.cyctest.agent.memory.MemoryStore;
 import com.cyc.cyctest.agent.slot.SlotExtractionService;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,7 +28,7 @@ import java.util.Optional;
 /**
  * Agent 运行时（经典 while-switch 状态机实现）。
  * <p>
- * 保留原始实现供对比；生产推荐使用 {@link GraphAgentRuntime}（StateGraph 版本）。
+ * 保留原始实现供对比；生产推荐使用 {@link }（StateGraph 版本）。
  * <p>
  * 执行流程：
  * <pre>
@@ -140,6 +144,204 @@ public class AgentRuntime implements IAgentRuntime {
                 ctx.evidence().evidence(), ctx.trace());
     }
 
+    /**
+     * 带进度回调的同步执行。
+     * <p>
+     * 与 run() 的唯一区别：在进入每个阶段前触发 callback.onProgress()，
+     * ROUTE / EXECUTE 完成后额外触发一次带结果摘要的补充事件。
+     * 适合 SSE 端点：CompletableFuture 跑 pipeline，callback 将事件推入 SseEmitter。
+     */
+    @Override
+    public ChatResponse runWithCallback(String sessionId, String userText, ProgressCallback callback) {
+        Optional<String> cached = semanticCacheService.get(userText);
+        if (cached.isPresent()) {
+            ConversationContext mem = memoryStore.load(sessionId);
+            mem.addTurn("user", userText);
+            mem.addTurn("assistant", "[CACHE] " + cached.get());
+            memoryStore.save(mem);
+            callback.onProgress("cache_hit", "命中语义缓存，直接返回答案");
+            return new ChatResponse(sessionId, AgentState.DONE.name(), false, null, null,
+                    cached.get(), null, null, List.of(), List.of("semantic_cache_hit"));
+        }
+
+        ConversationContext memory = memoryStore.load(sessionId);
+        memory.addTurn("user", userText);
+
+        AgentRunContext ctx = new AgentRunContext(
+                memory.sessionId(), userText, memory.slotState(), null, null, null, EvidencePackage.empty(),
+                AgentState.EXTRACT, 0, null, memory.pendingClarifyQuestion(), List.of("start")
+        );
+
+        int guard = 0;
+        while (ctx.state() != AgentState.DONE && ctx.state() != AgentState.WAITING_USER_INPUT
+                && ctx.state() != AgentState.FAILED && guard++ < 20) {
+
+            // 进入每个阶段前推送进度
+            callback.onProgress(stageType(ctx.state()), stageMsg(ctx.state()));
+            AgentState prevState = ctx.state();
+
+            ctx = switch (ctx.state()) {
+                case EXTRACT    -> extract(ctx, memory);
+                case CLARIFY    -> clarify(ctx, memory);
+                case ROUTE      -> route(ctx, memory);
+                case PLAN       -> plan(ctx, memory);
+                case EXECUTE    -> execute(ctx, memory);
+                case RERETRIEVE -> reRetrieve(ctx);
+                case SYNTHESIZE -> synthesize(ctx, memory);
+                default         -> ctx.withState(AgentState.FAILED, "unexpected state");
+            };
+
+            // 关键阶段完成后推送带结果摘要的补充事件
+            if (prevState == AgentState.ROUTE && ctx.route() != null) {
+                callback.onProgress("route_done",
+                        "已路由至 " + ctx.route().domainCode() + "/" + ctx.route().subDomainCode()
+                        + "，置信度 " + String.format("%.2f", ctx.route().confidence()));
+            }
+            if (prevState == AgentState.EXECUTE) {
+                callback.onProgress("execute_done",
+                        "工具执行完成，证据质量分 " + String.format("%.2f", ctx.evidence().qualityScore())
+                        + "，共 " + ctx.evidence().evidence().size() + " 条证据");
+            }
+        }
+
+        if (guard >= 20) ctx = ctx.withState(AgentState.FAILED, "runtime guard exceeded");
+        if (ctx.finalAnswer() != null) memory.addTurn("assistant", ctx.finalAnswer());
+        memoryCompressionService.compressIfNeeded(memory);
+        if (ctx.state() == AgentState.DONE) episodicMemoryService.recordEpisode(memory.sessionId(), ctx);
+        memoryStore.save(memory);
+        if (ctx.state() == AgentState.DONE && ctx.finalAnswer() != null) {
+            semanticCacheService.put(userText, ctx.finalAnswer());
+        }
+
+        boolean waiting = ctx.state() == AgentState.WAITING_USER_INPUT;
+        return new ChatResponse(ctx.sessionId(), ctx.state().name(), waiting, ctx.clarifyQuestion(),
+                waiting ? "请使用相同 sessionId 继续补充信息，下一轮会继承已提取槽位并从 EXTRACT 重新进入。" : null,
+                ctx.finalAnswer(), ctx.slots(), ctx.route(),
+                ctx.evidence().evidence(), ctx.trace());
+    }
+
+    /**
+     * 流式执行：各阶段实时推送 Progress 事件，SYNTHESIZE 阶段 token 级推送。
+     * 事件顺序：Progress(extract)→…→Progress(synthesizing)→Token×N→Done。
+     */
+    @Override
+    public Flux<AgentProgressEvent> stream(String sessionId, String userText) {
+        return Flux.<AgentProgressEvent>create(sink -> {
+            // L0 语义缓存命中：直接推送答案，跳过 pipeline
+            Optional<String> cached = semanticCacheService.get(userText);
+            if (cached.isPresent()) {
+                ConversationContext mem = memoryStore.load(sessionId);
+                mem.addTurn("user", userText);
+                mem.addTurn("assistant", "[CACHE] " + cached.get());
+                memoryStore.save(mem);
+                ChatResponse response = new ChatResponse(sessionId, AgentState.DONE.name(), false,
+                        null, null, cached.get(), null, null, List.of(), List.of("semantic_cache_hit"));
+                sink.next(new AgentProgressEvent.Done(response));
+                sink.complete();
+                return;
+            }
+
+            ConversationContext memory = memoryStore.load(sessionId);
+            memory.addTurn("user", userText);
+
+            AgentRunContext ctx = new AgentRunContext(
+                    memory.sessionId(), userText, memory.slotState(), null, null, null,
+                    EvidencePackage.empty(), AgentState.EXTRACT, 0, null,
+                    memory.pendingClarifyQuestion(), List.of("start")
+            );
+
+            // 运行各阶段（SYNTHESIZE 之前），实时推送进度事件
+            int guard = 0;
+            while (ctx.state() != AgentState.DONE
+                    && ctx.state() != AgentState.WAITING_USER_INPUT
+                    && ctx.state() != AgentState.FAILED
+                    && ctx.state() != AgentState.SYNTHESIZE
+                    && guard++ < 20) {
+                sink.next(new AgentProgressEvent.Progress(stageType(ctx.state()), stageMsg(ctx.state())));
+                ctx = switch (ctx.state()) {
+                    case EXTRACT     -> extract(ctx, memory);
+                    case CLARIFY     -> clarify(ctx, memory);
+                    case ROUTE       -> route(ctx, memory);
+                    case PLAN        -> plan(ctx, memory);
+                    case EXECUTE     -> execute(ctx, memory);
+                    case RERETRIEVE  -> reRetrieve(ctx);
+                    default          -> ctx.withState(AgentState.FAILED, "unexpected state in stream");
+                };
+            }
+
+            if (ctx.state() == AgentState.SYNTHESIZE) {
+                // SYNTHESIZE：token 流式推送
+                memory.resetClarifyCount();
+                memory.recordRoute(ctx.route());
+                memory.recordEvidence(ctx.evidence().evidence());
+                List<String> episodic = episodicMemoryService.recallRelevant(
+                        EpisodicMemoryService.effectiveGoal(ctx), 3);
+                sink.next(new AgentProgressEvent.Progress("synthesizing", "正在生成答案..."));
+
+                final AgentRunContext finalCtx = ctx;
+                StringBuilder fullAnswer = new StringBuilder();
+                answerSynthesizer.synthesizeStream(finalCtx, episodic)
+                        .subscribe(
+                                token -> {
+                                    fullAnswer.append(token);
+                                    sink.next(new AgentProgressEvent.Token(token));
+                                },
+                                sink::error,
+                                () -> {
+                                    String answer = fullAnswer.toString();
+                                    memory.addTurn("assistant", answer);
+                                    memoryCompressionService.compressIfNeeded(memory);
+                                    episodicMemoryService.recordEpisode(
+                                            memory.sessionId(), finalCtx.withFinalAnswer(answer));
+                                    memoryStore.save(memory);
+                                    semanticCacheService.put(userText, answer);
+                                    ChatResponse response = new ChatResponse(
+                                            sessionId, AgentState.DONE.name(), false, null, null,
+                                            answer, finalCtx.slots(), finalCtx.route(),
+                                            finalCtx.evidence().evidence(), finalCtx.trace());
+                                    sink.next(new AgentProgressEvent.Done(response));
+                                    sink.complete();
+                                }
+                        );
+            } else {
+                // WAITING / FAILED / DONE（无 synthesize，如澄清中断）
+                if (ctx.finalAnswer() != null) memory.addTurn("assistant", ctx.finalAnswer());
+                memoryCompressionService.compressIfNeeded(memory);
+                if (ctx.state() == AgentState.DONE) {
+                    episodicMemoryService.recordEpisode(memory.sessionId(), ctx);
+                }
+                memoryStore.save(memory);
+                if (ctx.state() == AgentState.DONE && ctx.finalAnswer() != null) {
+                    semanticCacheService.put(userText, ctx.finalAnswer());
+                }
+                boolean waiting = ctx.state() == AgentState.WAITING_USER_INPUT;
+                ChatResponse response = new ChatResponse(
+                        ctx.sessionId(), ctx.state().name(), waiting, ctx.clarifyQuestion(),
+                        waiting ? "请使用相同 sessionId 继续补充信息，下一轮会继承已提取槽位并从 EXTRACT 重新进入。" : null,
+                        ctx.finalAnswer(), ctx.slots(), ctx.route(),
+                        ctx.evidence().evidence(), ctx.trace());
+                sink.next(new AgentProgressEvent.Done(response));
+                sink.complete();
+            }
+        }).subscribeOn(Schedulers.boundedElastic());  // 阻塞的 pipeline 阶段跑在弹性线程池，不占用 HTTP 线程
+    }
+
+    private static String stageType(AgentState state) {
+        return state.name().toLowerCase();
+    }
+
+    private static String stageMsg(AgentState state) {
+        return switch (state) {
+            case EXTRACT    -> "正在理解您的问题...";
+            case CLARIFY    -> "正在分析澄清需求...";
+            case ROUTE      -> "正在路由到对应领域...";
+            case PLAN       -> "正在规划执行步骤...";
+            case EXECUTE    -> "正在执行工具调用...";
+            case RERETRIEVE -> "证据质量不足，正在补充检索...";
+            default         -> state.name();
+        };
+    }
+
     private AgentRunContext extract(AgentRunContext ctx, ConversationContext memory) {
         SlotState slots = slotExtractionService.extractAndMerge(ctx.userText(), memory);
         ClarifyLlmResult clarify = clarifyService.analyze(ctx.userText(), memory, slots);
@@ -160,7 +362,18 @@ public class AgentRuntime implements IAgentRuntime {
     }
 
     private AgentRunContext route(AgentRunContext ctx, ConversationContext memory) {
+        RouteResult previousRoute = memory.currentRoute();   // 记录旧领域，用于检测切换
         RouteResult route = domainRouter.route(ctx.userText(), ctx.clarify(), ctx.slots());
+
+        // 领域切换检测：用户话题跨领域时（如从交易转到支付），重置旧领域专属 slot，
+        // 避免 orderId 污染支付查询、payOrderId 污染交易查询。
+        // env/errorCode/timeRange 属于跨领域信息，始终保留。
+        SlotState slots = ctx.slots();
+        if (isDomainSwitch(previousRoute, route)) {
+            slots = slots.resetForDomain(route.domainCode());
+            memory.setSlots(slots);   // 直接替换，不走 merge，防止旧值通过 first(newer,older) 回填
+        }
+
         memory.currentRoute(route);
         memoryStore.save(memory);
         if ("clarify_required".equals(route.handleMode())) {
@@ -171,22 +384,29 @@ public class AgentRuntime implements IAgentRuntime {
                         route.subDomainCode(), route.subDomainName(),
                         "knowledge_and_tool", route.confidence(),
                         "forced: max clarify rounds reached");
-                return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), forced, ctx.plan(),
+                return new AgentRunContext(ctx.sessionId(), ctx.userText(), slots, ctx.clarify(), forced, ctx.plan(),
                         ctx.evidence(), AgentState.PLAN, ctx.retryCount(), ctx.finalAnswer(), ctx.clarifyQuestion(), ctx.trace())
                         .withState(AgentState.PLAN, "forced route after max clarify");
             }
             String answer = "这个问题可能涉及多个领域，请确认你要排查的是支付、交易、履约还是营销？";
-            return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), route, ctx.plan(),
+            return new AgentRunContext(ctx.sessionId(), ctx.userText(), slots, ctx.clarify(), route, ctx.plan(),
                     ctx.evidence(), AgentState.CLARIFY, ctx.retryCount(), answer, answer, ctx.trace())
                     .withState(AgentState.CLARIFY, "route low confidence");
         }
-        return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), route, ctx.plan(),
+        return new AgentRunContext(ctx.sessionId(), ctx.userText(), slots, ctx.clarify(), route, ctx.plan(),
                 ctx.evidence(), AgentState.PLAN, ctx.retryCount(), ctx.finalAnswer(), ctx.clarifyQuestion(), ctx.trace())
                 .withState(AgentState.PLAN, route.reason());
     }
 
+    private static boolean isDomainSwitch(RouteResult prev, RouteResult next) {
+        if (prev == null || next == null) return false;
+        String prevDomain = prev.domainCode();
+        String nextDomain = next.domainCode();
+        return prevDomain != null && nextDomain != null && !prevDomain.equals(nextDomain);
+    }
+
     private AgentRunContext plan(AgentRunContext ctx, ConversationContext memory) {
-        ExecutionPlan plan = taskPlanner.plan(ctx.userText(), ctx.slots(), ctx.route());
+        ExecutionPlan plan = taskPlanner.plan(EpisodicMemoryService.effectiveGoal(ctx), ctx.slots(), ctx.route());
         memory.currentPlan(plan);
         memoryStore.save(memory);
         return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), ctx.route(), plan,
@@ -206,7 +426,8 @@ public class AgentRuntime implements IAgentRuntime {
     }
 
     private AgentRunContext reRetrieve(AgentRunContext ctx) {
-        ExecutionPlan rewritten = taskPlanner.rewriteRetrievalPlan(ctx.plan(), ctx.userText(), ctx.slots().errorCode());
+        ExecutionPlan rewritten = taskPlanner.rewriteRetrievalPlan(
+                ctx.plan(), EpisodicMemoryService.effectiveGoal(ctx), ctx.slots().errorCode());
         return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), ctx.route(), rewritten,
                 ctx.evidence(), AgentState.EXECUTE, ctx.retryCount() + 1, ctx.finalAnswer(), ctx.clarifyQuestion(), ctx.trace())
                 .withState(AgentState.EXECUTE, "rewrite retrieval query");
@@ -217,8 +438,10 @@ public class AgentRuntime implements IAgentRuntime {
         memory.recordRoute(ctx.route());
         memory.recordEvidence(ctx.evidence().evidence());
 
-        // L4 情景记忆召回：检索与当前问题语义相似的历史处理经验
-        List<String> episodicContext = episodicMemoryService.recallRelevant(ctx.userText(), 3);
+        // L4 情景记忆召回：用 effectiveGoal（含上下文推断）而非裸 userText 查询，
+        // 保证写入向量时的 goal 和召回时的 query 在同一语义空间
+        List<String> episodicContext = episodicMemoryService.recallRelevant(
+                EpisodicMemoryService.effectiveGoal(ctx), 3);
 
         String answer = answerSynthesizer.synthesize(ctx, episodicContext);
         return new AgentRunContext(ctx.sessionId(), ctx.userText(), ctx.slots(), ctx.clarify(), ctx.route(), ctx.plan(),

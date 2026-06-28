@@ -14,12 +14,14 @@ import java.util.List;
 /**
  * ConversationContext 的可序列化快照，用于 Redis 持久化。
  * 所有字段均为 Jackson 可序列化类型，通过 JavaTimeModule 支持 Instant。
+ *
+ * 注意：旧版本快照 JSON 可能含有 "turns" 字段（已废弃），
+ * Jackson 默认忽略未知字段，反序列化不受影响。
  */
 public record ConversationSnapshot(
         String sessionId,
         Instant createdAt,
         String title,
-        List<String> turns,
         List<Turn> structuredTurns,
         int compressedTurnCount,
         int clarifyCount,

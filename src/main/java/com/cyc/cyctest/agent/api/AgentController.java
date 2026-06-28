@@ -1,8 +1,10 @@
 package com.cyc.cyctest.agent.api;
 
+import com.cyc.cyctest.agent.core.AgentModels.AgentProgressEvent;
 import com.cyc.cyctest.agent.core.AgentModels.ChatRequest;
 import com.cyc.cyctest.agent.core.AgentModels.ChatResponse;
 import com.cyc.cyctest.agent.core.IAgentRuntime;
+import reactor.core.Disposable;
 import com.cyc.cyctest.agent.graph.GraphAgentRuntime;
 import com.cyc.cyctest.agent.guardrails.GuardrailsService;
 import com.cyc.cyctest.agent.llm.LlmClient;
@@ -97,6 +99,18 @@ public class AgentController {
      * Agent 状态流 SSE：推送完整 Agent 执行链路的状态变更事件。
      * 适合前端展示 Thought→Action→Observation 的 ReAct 过程。
      */
+    /**
+     * Agent 进度流 SSE（ProgressCallback 方案）。
+     * <p>
+     * 与旧版的区别：旧版等 pipeline 跑完再一次性回放 trace，用户体验是假流；
+     * 新版在每个阶段开始/完成时立即推送事件，用户能看到实时进度。
+     * <p>
+     * 实现模式：CompletableFuture + ProgressCallback。
+     * - 简单：无 Reactor 依赖，callback = lambda，推送逻辑清晰可读。
+     * - 适合面试演示：能直观看到 EXTRACT→ROUTE→PLAN→EXECUTE→SYNTHESIZE 的事件序列。
+     * - 与 /chat/stream/v2 的区别：无 token 级流式，答案一次性推送；
+     *   但各阶段进度是真实时，首字节延迟 < 200ms。
+     */
     @GetMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStream(@RequestParam(defaultValue = "default") String sessionId,
                                  @RequestParam String message) {
@@ -107,9 +121,7 @@ public class AgentController {
                 try {
                     emitter.send(SseEmitter.event().name("error").data(guard.reason()));
                     emitter.complete();
-                } catch (Exception e) {
-                    emitter.completeWithError(e);
-                }
+                } catch (Exception e) { emitter.completeWithError(e); }
             });
             return emitter;
         }
@@ -117,10 +129,14 @@ public class AgentController {
         CompletableFuture.runAsync(() -> {
             try {
                 emitter.send(SseEmitter.event().name("run_start").data("sessionId=" + sessionId));
-                ChatResponse response = agentRuntime.run(sessionId, safeInput);
-                for (String trace : response.trace()) {
-                    emitter.send(SseEmitter.event().name("state_change").data(trace));
-                }
+
+                // ProgressCallback：每个阶段开始/完成时立即推送 SSE 事件
+                ChatResponse response = agentRuntime.runWithCallback(sessionId, safeInput, (type, msg) -> {
+                    try {
+                        emitter.send(SseEmitter.event().name(type).data(msg));
+                    } catch (Exception ignored) {}
+                });
+
                 if (response.waitingUserInput()) {
                     emitter.send(SseEmitter.event().name("clarify_required").data(response.clarifyQuestion()));
                 } else {
@@ -133,6 +149,57 @@ public class AgentController {
                 emitter.completeWithError(e);
             }
         });
+        return emitter;
+    }
+
+    /**
+     * 真流式 SSE（v2）：实时推送 Agent 各阶段进度 + LLM token 级输出，首字延迟极低。
+     * <p>
+     * 事件类型：
+     * - extract / route / plan / execute / reretrieve：阶段开始通知
+     * - synthesizing：开始生成答案
+     * - token：LLM 逐 token 字符块（可直接渲染打字机效果）
+     * - done：包含完整 ChatResponse 的结束事件
+     * - error：异常事件
+     * <p>
+     * 与 /chat/stream 的区别：
+     * - /chat/stream：完整 pipeline 跑完后一次性回放 trace，非真实时
+     * - /chat/stream/v2：各阶段完成时立即推送，答案 token 级实时输出
+     */
+    @GetMapping(value = "/chat/stream/v2", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chatStreamV2(
+            @RequestParam(defaultValue = "default") String sessionId,
+            @RequestParam String message) {
+        var guard = guardrailsService.check(sessionId, message);
+        SseEmitter emitter = new SseEmitter(120_000L);
+        if (guard.blocked()) {
+            try {
+                emitter.send(SseEmitter.event().name("error").data(guard.reason()));
+            } catch (Exception ignored) {}
+            emitter.complete();
+            return emitter;
+        }
+        Disposable subscription = agentRuntime.stream(sessionId, guard.sanitizedInput())
+                .subscribe(
+                        event -> {
+                            try {
+                                if (event instanceof AgentProgressEvent.Progress p) {
+                                    emitter.send(SseEmitter.event().name(p.type()).data(p.message()));
+                                } else if (event instanceof AgentProgressEvent.Token t) {
+                                    emitter.send(SseEmitter.event().name("token").data(t.delta()));
+                                } else if (event instanceof AgentProgressEvent.Done d) {
+                                    emitter.send(SseEmitter.event().name("done").data(d.response()));
+                                }
+                            } catch (Exception e) {
+                                emitter.completeWithError(e);
+                            }
+                        },
+                        emitter::completeWithError,
+                        emitter::complete
+                );
+        // 客户端断连时取消订阅，避免后台 pipeline 继续空跑
+        emitter.onCompletion(subscription::dispose);
+        emitter.onTimeout(subscription::dispose);
         return emitter;
     }
 

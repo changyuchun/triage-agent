@@ -1,5 +1,6 @@
 package com.cyc.cyctest.agent.memory;
 
+import com.cyc.cyctest.agent.config.AgentProperties;
 import com.cyc.cyctest.agent.core.AgentModels.Evidence;
 import com.cyc.cyctest.agent.core.AgentModels.EvidencePackage;
 import com.cyc.cyctest.agent.core.AgentModels.ExecutionPlan;
@@ -22,8 +23,34 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 public class ConversationContext {
+
+    /**
+     * 记忆策略——控制滑动窗口大小和压缩参数。
+     * 从 AgentProperties.Memory 构建，或使用 defaults() 兜底。
+     */
+    public record MemoryPolicy(
+            int slidingWindowSize,
+            int firstCompressAt,
+            int compressEvery,
+            int retainAfterCompress
+    ) {
+        public static MemoryPolicy defaults() {
+            return new MemoryPolicy(50, 8, 6, 3);
+        }
+
+        public static MemoryPolicy from(AgentProperties.Memory memory) {
+            return new MemoryPolicy(
+                    memory.slidingWindowSize(),
+                    memory.firstCompressAt(),
+                    memory.compressEvery(),
+                    memory.retainAfterCompress()
+            );
+        }
+    }
+
     private final String sessionId;
     private final Instant createdAt;
+    private final MemoryPolicy policy;
     private SlotState slotState = SlotState.empty();
     private RouteResult currentRoute;
     private ExecutionPlan currentPlan;
@@ -36,21 +63,28 @@ public class ConversationContext {
     private String pendingClarifyQuestion;
     private String title = "新会话";
     private String lastTurnNodeId;
-    private final List<String> turns = new ArrayList<>();
+    // structuredTurns 是唯一的对话记录来源，兼具滑动窗口和压缩两个职责
     private final List<Turn> structuredTurns = new ArrayList<>();
     private final Map<String, MemoryNode> nodes = new LinkedHashMap<>();
     private final List<MemoryEdge> edges = new ArrayList<>();
 
     /** 正常创建新会话 */
-    public ConversationContext(String sessionId) {
+    public ConversationContext(String sessionId, MemoryPolicy policy) {
         this.sessionId = sessionId;
+        this.policy = policy;
         this.createdAt = Instant.now();
         putNode("session:" + sessionId, "SESSION", "会话 " + sessionId, Map.of("sessionId", sessionId));
     }
 
+    /** 开发/测试模式：使用默认策略 */
+    public ConversationContext(String sessionId) {
+        this(sessionId, MemoryPolicy.defaults());
+    }
+
     /** 从 Redis 快照恢复会话，不产生新节点 */
-    ConversationContext(ConversationSnapshot s) {
+    ConversationContext(ConversationSnapshot s, MemoryPolicy policy) {
         this.sessionId = s.sessionId();
+        this.policy = policy;
         this.createdAt = s.createdAt() != null ? s.createdAt() : Instant.now();
         this.title = s.title() != null ? s.title() : "新会话";
         this.summary = s.summary() != null ? s.summary() : "暂无摘要";
@@ -64,7 +98,6 @@ public class ConversationContext {
         this.currentPlan = s.currentPlan();
         this.evidencePackage = s.evidencePackage() != null ? s.evidencePackage() : EvidencePackage.empty();
         this.lastTurnNodeId = s.lastTurnNodeId();
-        if (s.turns() != null) this.turns.addAll(s.turns());
         if (s.structuredTurns() != null) this.structuredTurns.addAll(s.structuredTurns());
         if (s.nodes() != null) s.nodes().forEach(n -> this.nodes.put(n.id(), n));
         if (s.edges() != null) this.edges.addAll(s.edges());
@@ -74,7 +107,7 @@ public class ConversationContext {
     public ConversationSnapshot toSnapshot() {
         return new ConversationSnapshot(
                 sessionId, createdAt, title,
-                List.copyOf(turns), List.copyOf(structuredTurns),
+                List.copyOf(structuredTurns),
                 compressedTurnCount, clarifyCount,
                 pendingClarifyQuestion, currentGoal,
                 summary, summaryUpdatedAt,
@@ -84,15 +117,16 @@ public class ConversationContext {
         );
     }
 
-    public static ConversationContext fromSnapshot(ConversationSnapshot s) {
-        return new ConversationContext(s);
+    public static ConversationContext fromSnapshot(ConversationSnapshot s, MemoryPolicy policy) {
+        return new ConversationContext(s, policy);
     }
 
     // -------- Memory Compression (L3: Summary Memory) --------
 
     /** 判断是否需要触发 LLM 压缩摘要 */
     public boolean needsCompression() {
-        return structuredTurns.size() >= 8 && (structuredTurns.size() - compressedTurnCount) >= 6;
+        return structuredTurns.size() >= policy.firstCompressAt()
+                && (structuredTurns.size() - compressedTurnCount) >= policy.compressEvery();
     }
 
     /** 获取待压缩的最近对话（供 MemoryCompressionService 调用 LLM）*/
@@ -116,25 +150,16 @@ public class ConversationContext {
      * 摘要可能丢失最近几轮的细节（LLM生成时间有偏），
      * 保留少量最新原文作为"过渡缓冲"，确保上下文连贯。
      */
-    private static final int RETAIN_TURNS_AFTER_COMPRESS = 3;
-
     public void updateSummary(String llmSummary) {
         this.summary = llmSummary;
         this.summaryUpdatedAt = Instant.now();
 
-        // 清除已压缩的 structuredTurns，只保留最近 RETAIN_TURNS_AFTER_COMPRESS 条
-        int keepFrom = Math.max(0, structuredTurns.size() - RETAIN_TURNS_AFTER_COMPRESS);
+        // 保留最近 retainAfterCompress 条原文作为过渡缓冲（防止摘要遗漏最新细节）
+        int keepFrom = Math.max(0, structuredTurns.size() - policy.retainAfterCompress());
         List<Turn> retained = new ArrayList<>(structuredTurns.subList(keepFrom, structuredTurns.size()));
         structuredTurns.clear();
         structuredTurns.addAll(retained);
 
-        // turns（纯文本）同步清理，保持一致
-        int textKeepFrom = Math.max(0, turns.size() - RETAIN_TURNS_AFTER_COMPRESS);
-        List<String> retainedText = new ArrayList<>(turns.subList(textKeepFrom, turns.size()));
-        turns.clear();
-        turns.addAll(retainedText);
-
-        // 压缩水位线归零（因为 structuredTurns 已清空并重建）
         this.compressedTurnCount = 0;
     }
 
@@ -155,24 +180,28 @@ public class ConversationContext {
     public void pendingClarifyQuestion(String pendingClarifyQuestion) { this.pendingClarifyQuestion = pendingClarifyQuestion; }
 
     public void addTurn(String role, String content) {
-        turns.add(role + ": " + content);
         structuredTurns.add(new Turn(role, content == null ? "" : content, Instant.now()));
-        if (turns.size() > 20) turns.removeFirst();
-        if (structuredTurns.size() > 50) structuredTurns.removeFirst();
+        // 滑动窗口：超出上限时淘汰最旧轮次，保证内存有界
+        if (structuredTurns.size() > policy.slidingWindowSize()) structuredTurns.removeFirst();
         if ("user".equals(role) && "新会话".equals(title) && content != null && !content.isBlank()) {
             title = content.length() > 18 ? content.substring(0, 18) + "..." : content;
         }
-        String turnId = "turn:" + sessionId + ":" + turns.size();
+        String turnId = "turn:" + sessionId + ":" + structuredTurns.size();
         putNode(turnId, "TURN", role + ": " + abbreviate(content, 32),
                 Map.of("role", role, "content", content == null ? "" : content));
-        putEdge("session:" + sessionId, turnId, "HAS_TURN", Map.of("index", turns.size()));
+        putEdge("session:" + sessionId, turnId, "HAS_TURN", Map.of("index", structuredTurns.size()));
         if (lastTurnNodeId != null) {
             putEdge(lastTurnNodeId, turnId, "NEXT_TURN", Map.of());
         }
         lastTurnNodeId = turnId;
     }
 
-    public String recentTurns() { return String.join("\n", turns); }
+    /** recentTurns 从 structuredTurns 实时派生，不维护独立列表 */
+    public String recentTurns() {
+        return structuredTurns.stream()
+                .map(t -> t.role() + ": " + t.content())
+                .collect(Collectors.joining("\n"));
+    }
     public String title() { return title; }
     public Instant createdAt() { return createdAt; }
 
@@ -215,18 +244,26 @@ public class ConversationContext {
         return new MemoryGraph(sessionId, title, List.copyOf(nodes.values()), List.copyOf(edges));
     }
 
+    public RouteResult currentRoute() { return currentRoute; }
+
     public void currentGoal(String currentGoal) { this.currentGoal = currentGoal; }
     public void currentRoute(RouteResult currentRoute) { this.currentRoute = currentRoute; }
     public void currentPlan(ExecutionPlan currentPlan) { this.currentPlan = currentPlan; }
+
+    /** 领域切换后直接替换 slot（不做 merge），避免旧领域 ID 污染新领域查询 */
+    public void setSlots(SlotState slots) {
+        this.slotState = slots;
+        recordSlots(this.slotState);
+    }
 
     public void evidencePackage(EvidencePackage evidencePackage) {
         this.evidencePackage = evidencePackage == null ? EvidencePackage.empty() : evidencePackage;
     }
 
     public void refreshSummaryIfNeeded() {
-        if (structuredTurns.size() < 8) return;
+        if (structuredTurns.size() < policy.firstCompressAt()) return;
         int uncompressed = structuredTurns.size() - compressedTurnCount;
-        if (uncompressed < 6) return;
+        if (uncompressed < policy.compressEvery()) return;
         List<Turn> source = structuredTurns.subList(Math.max(0, structuredTurns.size() - 12), structuredTurns.size());
         StringBuilder sb = new StringBuilder();
         sb.append("已确认信息: ");

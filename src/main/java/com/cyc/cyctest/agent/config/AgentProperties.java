@@ -17,7 +17,7 @@ public record AgentProperties(
             runtime = new Runtime(2, 0.45, 60, 50, 30, 8, 5000, 2);
         }
         if (memory == null) {
-            memory = new Memory("in-memory", 7);
+            memory = new Memory("in-memory", 7, 50, 8, 6, 3);
         }
     }
 
@@ -44,10 +44,21 @@ public record AgentProperties(
     }
 
     /**
-     * 会话存储配置。
+     * 会话存储与记忆压缩配置。
      * store: in-memory（开发）| redis（生产）
      * ttlDays: 会话 Redis TTL（天），仅在 redis 模式下生效
+     * slidingWindowSize: structuredTurns 滑动窗口上限，超出后淘汰最旧轮次
+     * firstCompressAt: 首次触发 LLM 压缩所需的最少轮次（建议 = maxClarifyRounds*2 + 4）
+     * compressEvery: 每攒够 N 条新轮次后再次压缩
+     * retainAfterCompress: 压缩后保留的最新原文轮次数（过渡缓冲，防止摘要遗漏最近细节）
      */
-    public record Memory(String store, int ttlDays) {
+    public record Memory(
+            String store,
+            int ttlDays,
+            int slidingWindowSize,
+            int firstCompressAt,
+            int compressEvery,
+            int retainAfterCompress
+    ) {
     }
 }

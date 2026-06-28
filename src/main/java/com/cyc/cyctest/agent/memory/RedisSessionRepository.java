@@ -1,5 +1,7 @@
 package com.cyc.cyctest.agent.memory;
 
+import com.cyc.cyctest.agent.config.AgentProperties;
+import com.cyc.cyctest.agent.memory.ConversationContext.MemoryPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,13 +42,15 @@ public class RedisSessionRepository implements SessionRepository {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final long ttlDays;
+    private final MemoryPolicy memoryPolicy;
 
     public RedisSessionRepository(StringRedisTemplate redisTemplate,
                                    ObjectMapper objectMapper,
-                                   org.springframework.core.env.Environment env) {
+                                   AgentProperties properties) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
-        this.ttlDays = Long.parseLong(env.getProperty("agent.memory.ttl-days", "7"));
+        this.ttlDays = properties.memory().ttlDays();
+        this.memoryPolicy = MemoryPolicy.from(properties.memory());
     }
 
     @Override
@@ -97,12 +101,12 @@ public class RedisSessionRepository implements SessionRepository {
             if (json != null && !json.isBlank()) {
                 ConversationSnapshot snapshot = objectMapper.readValue(json, ConversationSnapshot.class);
                 log.debug("从 Redis 恢复会话: {}", sessionId);
-                return ConversationContext.fromSnapshot(snapshot);
+                return ConversationContext.fromSnapshot(snapshot, memoryPolicy);
             }
         } catch (Exception e) {
             log.warn("从 Redis 反序列化会话 {} 失败，将创建新会话: {}", sessionId, e.getMessage());
         }
-        return new ConversationContext(sessionId);
+        return new ConversationContext(sessionId, memoryPolicy);
     }
 
     private static String normalize(String sessionId) {

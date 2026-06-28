@@ -1,5 +1,7 @@
 package com.cyc.cyctest.agent.memory;
 
+import com.cyc.cyctest.agent.config.AgentProperties;
+import com.cyc.cyctest.agent.memory.ConversationContext.MemoryPolicy;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -19,11 +21,16 @@ import java.util.concurrent.ConcurrentHashMap;
 public class InMemorySessionRepository implements SessionRepository {
 
     private final Map<String, ConversationContext> sessions = new ConcurrentHashMap<>();
+    private final MemoryPolicy memoryPolicy;
+
+    public InMemorySessionRepository(AgentProperties properties) {
+        this.memoryPolicy = MemoryPolicy.from(properties.memory());
+    }
 
     @Override
     public ConversationContext loadOrCreate(String sessionId) {
         String key = normalize(sessionId);
-        return sessions.computeIfAbsent(key, ConversationContext::new);
+        return sessions.computeIfAbsent(key, sid -> new ConversationContext(sid, memoryPolicy));
     }
 
     @Override

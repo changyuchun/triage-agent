@@ -54,6 +54,19 @@ public final class AgentModels {
             );
         }
 
+        /**
+         * 领域切换时重置与目标领域无关的 ID 类 slot。
+         * 跨领域 slot（env/errorCode/timeRange）始终保留。
+         */
+        public SlotState resetForDomain(String domainCode) {
+            return switch (domainCode) {
+                case "payment"   -> new SlotState(null, payOrderId, checkoutId, env, errorCode, timeRange, null, null);
+                case "trade"     -> new SlotState(orderId, null, checkoutId, env, errorCode, timeRange, null, null);
+                case "marketing" -> new SlotState(orderId, null, null, env, errorCode, timeRange, activityId, couponId);
+                default          -> this;
+            };
+        }
+
         public boolean hasObjectId() {
             return hasText(orderId) || hasText(payOrderId) || hasText(checkoutId);
         }
@@ -202,6 +215,36 @@ public final class AgentModels {
             return new AgentRunContext(sessionId, userText, slots, clarify, route, plan, evidence, next,
                     retryCount, finalAnswer, clarifyQuestion, List.copyOf(nextTrace));
         }
+
+        public AgentRunContext withFinalAnswer(String answer) {
+            return new AgentRunContext(sessionId, userText, slots, clarify, route, plan, evidence,
+                    AgentState.DONE, retryCount, answer, clarifyQuestion, trace);
+        }
+    }
+
+    /**
+     * 同步 pipeline 进度回调。
+     * 由调用方（通常是 SSE 端点）实现，在各阶段开始/结束时被 runtime 调用。
+     * onProgress 不声明受检异常，实现方负责内部捕获 IOException。
+     */
+    @FunctionalInterface
+    public interface ProgressCallback {
+        void onProgress(String type, String message);
+
+        static ProgressCallback noop() {
+            return (type, message) -> {};
+        }
+    }
+
+    /**
+     * Agent 流式进度事件。
+     * Progress：各阶段开始/完成通知；Token：LLM 逐 token 推送；Done：完整响应。
+     */
+    public sealed interface AgentProgressEvent
+            permits AgentProgressEvent.Progress, AgentProgressEvent.Token, AgentProgressEvent.Done {
+        record Progress(String type, String message) implements AgentProgressEvent {}
+        record Token(String delta) implements AgentProgressEvent {}
+        record Done(ChatResponse response) implements AgentProgressEvent {}
     }
 
     public static boolean hasText(String value) {

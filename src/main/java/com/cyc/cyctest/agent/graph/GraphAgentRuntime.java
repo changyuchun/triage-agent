@@ -8,8 +8,11 @@ import com.cyc.cyctest.agent.core.AgentModels.*;
 import com.cyc.cyctest.agent.core.IAgentRuntime;
 import com.cyc.cyctest.agent.memory.ConversationContext;
 import com.cyc.cyctest.agent.memory.MemoryStore;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.HashMap;
 import java.util.List;
@@ -44,7 +47,7 @@ public class GraphAgentRuntime implements IAgentRuntime {
     private final MemoryStore memoryStore;
     private final SemanticCacheService semanticCacheService;
 
-    public GraphAgentRuntime(CompiledGraph compiledGraph,
+    public GraphAgentRuntime(@Qualifier("agentCompiledGraph") CompiledGraph compiledGraph,
                              MemoryStore memoryStore,
                              SemanticCacheService semanticCacheService) {
         this.compiledGraph = compiledGraph;
@@ -112,6 +115,25 @@ public class GraphAgentRuntime implements IAgentRuntime {
                 waiting ? clarifyQ : null,
                 waiting ? "请使用相同 sessionId 继续补充信息，下一轮会继承已提取槽位。" : null,
                 answer, slots, route, evidence.evidence(), trace);
+    }
+
+    /**
+     * Graph 版本流式实现：在 boundedElastic 线程上运行 compiledGraph.invoke()（同步阻塞），
+     * 完成后将 trace 作为 Progress 事件回放，最后推送 Done。
+     * 与状态机版本的区别：无法在各阶段中途推送事件（Graph 内部状态不透传给外部 Sink）。
+     */
+    @Override
+    public Flux<AgentProgressEvent> stream(String sessionId, String userText) {
+        return Flux.<AgentProgressEvent>create(sink -> {
+            sink.next(new AgentProgressEvent.Progress("run_start", "Agent 正在处理，请稍候..."));
+            ChatResponse response = run(sessionId, userText);
+            // 将已完成的 trace 作为进度事件回放给前端
+            for (String trace : response.trace()) {
+                sink.next(new AgentProgressEvent.Progress("state_change", trace));
+            }
+            sink.next(new AgentProgressEvent.Done(response));
+            sink.complete();
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     /**

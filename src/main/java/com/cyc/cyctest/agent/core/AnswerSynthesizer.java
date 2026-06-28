@@ -6,6 +6,7 @@ import com.cyc.cyctest.agent.llm.JsonSupport;
 import com.cyc.cyctest.agent.llm.LlmClient;
 import com.cyc.cyctest.agent.skill.SkillRegistry;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -29,23 +30,44 @@ public class AnswerSynthesizer {
      * @param episodicContext L4 情景记忆召回结果（相似历史问题的处理结论），可为空列表
      */
     public String synthesize(AgentRunContext ctx, List<String> episodicContext) {
-        if (!llmClient.available()) {
+        if (!llmClient.available()) return templateAnswer(ctx);
+        try {
+            return llmClient.complete(buildSystem(ctx), buildUser(ctx, episodicContext));
+        } catch (Exception e) {
             return templateAnswer(ctx);
         }
+    }
+
+    /** 兼容旧调用（无情景记忆）*/
+    public String synthesize(AgentRunContext ctx) {
+        return synthesize(ctx, List.of());
+    }
+
+    /** 流式合成：token 级推送，供 /chat/stream/v2 使用 */
+    public Flux<String> synthesizeStream(AgentRunContext ctx, List<String> episodicContext) {
+        if (!llmClient.available()) return Flux.just(templateAnswer(ctx));
+        try {
+            return llmClient.streamTokens(buildSystem(ctx), buildUser(ctx, episodicContext));
+        } catch (Exception e) {
+            return Flux.just(templateAnswer(ctx));
+        }
+    }
+
+    private String buildSystem(AgentRunContext ctx) {
         String domainCode = ctx.route() != null ? ctx.route().domainCode() : "";
         String subDomainCode = ctx.route() != null ? ctx.route().subDomainCode() : "";
-        // 精确子域 SOP 优先（pay_diagnosis 诊断SOP > payment 通用SOP）
         String domainSop = skillRegistry.sopFor(domainCode, subDomainCode);
         String sopSection = domainSop.isBlank() ? "" : "\n\n领域诊断 SOP（按此标准回答，不得偏离）：\n" + domainSop;
-        String system = """
+        return """
                 你是基础平台智能答疑 Agent 的答案合成模块。
                 严格基于证据回答，不要编造工具没有查到的事实。
                 输出结构（必须包含以下五段，每段标题加粗）：
                 **核心结论** | **关键事实**（事实后标注 [ref:evidenceId]）| **排查过程** | **建议** | **限制**
                 控制在 600 字以内，不要重复证据原文。%s
                 """.formatted(sopSection);
+    }
 
-        // 将情景记忆注入 Prompt：让 LLM 参考历史相似问题的处理结论
+    private String buildUser(AgentRunContext ctx, List<String> episodicContext) {
         String episodicSection = "";
         if (episodicContext != null && !episodicContext.isEmpty()) {
             episodicSection = "\n\n历史相似问题经验（情景记忆，供参考）:\n"
@@ -54,8 +76,7 @@ public class AnswerSynthesizer {
                           .map(e -> "- " + e)
                           .collect(Collectors.joining("\n"));
         }
-
-        String user = """
+        return """
                 用户问题:
                 %s
 
@@ -69,16 +90,6 @@ public class AnswerSynthesizer {
                 %s%s
                 """.formatted(ctx.userText(), ctx.route(), ctx.slots(),
                         jsonSupport.write(ctx.evidence().evidence()), episodicSection);
-        try {
-            return llmClient.complete(system, user);
-        } catch (Exception e) {
-            return templateAnswer(ctx);
-        }
-    }
-
-    /** 兼容旧调用（无情景记忆）*/
-    public String synthesize(AgentRunContext ctx) {
-        return synthesize(ctx, List.of());
     }
 
     private String templateAnswer(AgentRunContext ctx) {

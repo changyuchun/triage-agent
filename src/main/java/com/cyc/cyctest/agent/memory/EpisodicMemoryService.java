@@ -87,12 +87,22 @@ public class EpisodicMemoryService {
     private String buildEpisodeContent(String sessionId, AgentRunContext ctx) {
         return String.format(
                 "会话目标: %s\n路由: %s/%s\n关键槽位: %s\n结论摘要: %s",
-                ctx.userText(),
+                effectiveGoal(ctx),
                 ctx.route().domainCode(),
                 ctx.route().subDomainCode(),
                 ctx.slots(),
                 abbreviate(ctx.finalAnswer(), MAX_CONTENT_LEN)
         );
+    }
+
+    /**
+     * 优先用 ClarifyService 推断的完整意图（含上下文），兜底用当轮原始输入。
+     * userGoal 由 LLM 在 EXTRACT 阶段推断，语义更完整，向量匹配更准。
+     */
+    public static String effectiveGoal(AgentRunContext ctx) {
+        return (ctx.clarify() != null && ctx.clarify().userGoal() != null && !ctx.clarify().userGoal().isBlank())
+                ? ctx.clarify().userGoal()
+                : ctx.userText();
     }
 
     private static String abbreviate(String text, int max) {
