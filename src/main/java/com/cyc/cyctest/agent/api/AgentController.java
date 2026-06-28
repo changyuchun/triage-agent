@@ -130,12 +130,20 @@ public class AgentController {
             try {
                 emitter.send(SseEmitter.event().name("run_start").data("sessionId=" + sessionId));
 
-                // ProgressCallback：每个阶段开始/完成时立即推送 SSE 事件
-                ChatResponse response = agentRuntime.runWithCallback(sessionId, safeInput, (type, msg) -> {
-                    try {
-                        emitter.send(SseEmitter.event().name(type).data(msg));
-                    } catch (Exception ignored) {}
-                });
+                // ProgressCallback：阶段进度 + token 级打字机回调
+                ChatResponse response = agentRuntime.runWithCallback(sessionId, safeInput,
+                        new com.cyc.cyctest.agent.core.AgentModels.ProgressCallback() {
+                            @Override
+                            public void onProgress(String type, String msg) {
+                                try { emitter.send(SseEmitter.event().name(type).data(msg)); }
+                                catch (Exception ignored) {}
+                            }
+                            @Override
+                            public void onToken(String delta) {
+                                try { emitter.send(SseEmitter.event().name("token").data(delta)); }
+                                catch (Exception ignored) {}
+                            }
+                        });
 
                 if (response.waitingUserInput()) {
                     emitter.send(SseEmitter.event().name("clarify_required").data(response.clarifyQuestion()));

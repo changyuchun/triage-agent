@@ -175,7 +175,6 @@ public class AgentRuntime implements IAgentRuntime {
         while (ctx.state() != AgentState.DONE && ctx.state() != AgentState.WAITING_USER_INPUT
                 && ctx.state() != AgentState.FAILED && guard++ < 20) {
 
-            // 进入每个阶段前推送进度
             callback.onProgress(stageType(ctx.state()), stageMsg(ctx.state()));
             AgentState prevState = ctx.state();
 
@@ -186,11 +185,22 @@ public class AgentRuntime implements IAgentRuntime {
                 case PLAN       -> plan(ctx, memory);
                 case EXECUTE    -> execute(ctx, memory);
                 case RERETRIEVE -> reRetrieve(ctx);
-                case SYNTHESIZE -> synthesize(ctx, memory);
+                case SYNTHESIZE -> {
+                    memory.resetClarifyCount();
+                    memory.recordRoute(ctx.route());
+                    memory.recordEvidence(ctx.evidence().evidence());
+                    List<String> episodic = episodicMemoryService.recallRelevant(
+                            EpisodicMemoryService.effectiveGoal(ctx), 3);
+                    StringBuilder sb = new StringBuilder();
+                    for (String token : answerSynthesizer.synthesizeStream(ctx, episodic).toIterable()) {
+                        sb.append(token);
+                        callback.onToken(token);
+                    }
+                    yield ctx.withFinalAnswer(sb.toString());
+                }
                 default         -> ctx.withState(AgentState.FAILED, "unexpected state");
             };
 
-            // 关键阶段完成后推送带结果摘要的补充事件
             if (prevState == AgentState.ROUTE && ctx.route() != null) {
                 callback.onProgress("route_done",
                         "已路由至 " + ctx.route().domainCode() + "/" + ctx.route().subDomainCode()

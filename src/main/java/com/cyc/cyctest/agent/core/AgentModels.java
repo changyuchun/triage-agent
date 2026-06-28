@@ -227,9 +227,10 @@ public final class AgentModels {
      * 由调用方（通常是 SSE 端点）实现，在各阶段开始/结束时被 runtime 调用。
      * onProgress 不声明受检异常，实现方负责内部捕获 IOException。
      */
-    @FunctionalInterface
     public interface ProgressCallback {
         void onProgress(String type, String message);
+
+        default void onToken(String delta) {}
 
         static ProgressCallback noop() {
             return (type, message) -> {};
