@@ -18,6 +18,7 @@ import com.cyc.cyctest.agent.memory.EpisodicMemoryService;
 import com.cyc.cyctest.agent.memory.MemoryCompressionService;
 import com.cyc.cyctest.agent.memory.MemoryStore;
 import com.cyc.cyctest.agent.slot.SlotExtractionService;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
@@ -39,6 +40,7 @@ import java.util.Optional;
  *                                              SYNTHESIZE → DONE
  * </pre>
  */
+@Primary
 @Service
 public class AgentRuntime implements IAgentRuntime {
 

@@ -9,20 +9,32 @@ import com.cyc.cyctest.agent.core.AgentModels.SlotState;
 import com.cyc.cyctest.agent.llm.JsonSupport;
 import com.cyc.cyctest.agent.llm.LlmClient;
 import com.cyc.cyctest.agent.memory.ConversationContext;
+import com.cyc.cyctest.agent.slot.SlotExtractor;
 import org.springframework.stereotype.Service;
 
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class ClarifyService {
     private final LlmClient llmClient;
     private final JsonSupport jsonSupport;
     private final AgentProperties properties;
+    private final Map<String, String> promptMap;
 
-    public ClarifyService(LlmClient llmClient, JsonSupport jsonSupport, AgentProperties properties) {
+    public ClarifyService(LlmClient llmClient, JsonSupport jsonSupport, AgentProperties properties,
+                          List<SlotExtractor> extractors) {
         this.llmClient = llmClient;
         this.jsonSupport = jsonSupport;
         this.properties = properties;
+        // 低优先级先放，高优先级后覆盖，确保 payment(100) > marketing(80)
+        Map<String, String> merged = new HashMap<>();
+        extractors.stream()
+                .sorted(Comparator.comparingInt(SlotExtractor::priority))
+                .forEach(e -> merged.putAll(e.clarifyPrompts()));
+        this.promptMap = Map.copyOf(merged);
     }
 
     public ClarifyLlmResult analyze(String userText, ConversationContext context, SlotState slots) {
@@ -66,10 +78,14 @@ public class ClarifyService {
         }
         if (llm.problemType() == ProblemType.STATUS_QUERY || llm.problemType() == ProblemType.DIAGNOSIS) {
             if (!slots.hasObjectId()) {
-                return ClarifyDecision.ask("请提供订单号、支付单号或 checkoutId，我才能查询具体对象。", "missing object id");
+                return ClarifyDecision.ask(
+                        promptMap.getOrDefault("objectId", "请提供相关 ID 以便查询具体对象。"),
+                        "missing object id");
             }
             if (slots.env() == null || slots.env() == Env.UNKNOWN) {
-                return ClarifyDecision.ask("请确认查询环境：生产、预发还是日常？", "missing env");
+                return ClarifyDecision.ask(
+                        promptMap.getOrDefault("env", "请确认查询环境：生产、预发还是日常？"),
+                        "missing env");
             }
             return ClarifyDecision.ready();
         }
@@ -79,7 +95,9 @@ public class ClarifyService {
         if (llm.missingFields() != null && !llm.missingFields().isEmpty()) {
             List<String> fields = llm.missingFields();
             if (fields.contains("env")) {
-                return ClarifyDecision.ask("请确认查询环境：生产、预发还是日常？", "llm missing env");
+                return ClarifyDecision.ask(
+                        promptMap.getOrDefault("env", "请确认查询环境：生产、预发还是日常？"),
+                        "llm missing env");
             }
         }
         return ClarifyDecision.ready();

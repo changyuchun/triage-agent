@@ -39,7 +39,7 @@ import java.util.Optional;
  * <p>
  * {@code @Primary}：当 Spring 容器有多个 {@link IAgentRuntime} 实现时，优先注入本类。
  */
-@Primary
+
 @Service
 public class GraphAgentRuntime implements IAgentRuntime {
 

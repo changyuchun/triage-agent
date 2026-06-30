@@ -34,3 +34,6 @@ build/
 
 ### Local docs (kept locally, not pushed to remote) ###
 docs/
+
+### Local secrets (never push) ###
+application-local.properties

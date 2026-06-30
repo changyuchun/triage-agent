@@ -5,6 +5,7 @@ import com.cyc.cyctest.agent.core.AgentModels.SlotState;
 import com.cyc.cyctest.agent.memory.ConversationContext;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -24,6 +25,14 @@ public class PaymentSlotExtractor implements SlotExtractor {
     @Override
     public Set<String> slotNames() {
         return Set.of("payOrderId", "orderId", "checkoutId", "env", "errorCode", "timeRange");
+    }
+
+    @Override
+    public Map<String, String> clarifyPrompts() {
+        return Map.of(
+            "objectId", "请提供支付单号（PAY-xxx）、订单号（ORD-xxx）或结账 ID（CK-xxx），以便我查询。",
+            "env",      "请确认查询环境：生产（线上/prod）、预发（pre）还是日常（daily/test）？"
+        );
     }
 
     @Override

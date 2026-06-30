@@ -5,6 +5,7 @@ import com.cyc.cyctest.agent.core.AgentModels.SlotState;
 import com.cyc.cyctest.agent.memory.ConversationContext;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -22,6 +23,13 @@ public class MarketingSlotExtractor implements SlotExtractor {
     @Override
     public Set<String> slotNames() {
         return Set.of("activityId", "couponId");
+    }
+
+    @Override
+    public Map<String, String> clarifyPrompts() {
+        return Map.of(
+            "objectId", "请提供活动 ID（ACT-xxx）或优惠券 ID（CPN-xxx）。"
+        );
     }
 
     @Override

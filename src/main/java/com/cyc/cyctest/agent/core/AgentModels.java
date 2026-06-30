@@ -68,7 +68,8 @@ public final class AgentModels {
         }
 
         public boolean hasObjectId() {
-            return hasText(orderId) || hasText(payOrderId) || hasText(checkoutId);
+            return hasText(orderId) || hasText(payOrderId) || hasText(checkoutId)
+                    || hasText(activityId) || hasText(couponId);
         }
 
         public String primaryObjectId() {
