@@ -11,4 +11,7 @@ public interface SessionRepository {
     ConversationContext loadOrCreate(String sessionId);
     void save(ConversationContext context);
     List<MemoryStore.SessionSummary> listSessions();
+    /** 返回最近活跃时间超过 inactiveDays 天的 sessionId 列表 */
+    List<String> findOldSessionIds(int inactiveDays);
+    void deleteSession(String sessionId);
 }

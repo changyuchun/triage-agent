@@ -50,6 +50,7 @@ public class ConversationContext {
 
     private final String sessionId;
     private final Instant createdAt;
+    private Instant lastActiveAt;
     private final MemoryPolicy policy;
     private SlotState slotState = SlotState.empty();
     private RouteResult currentRoute;
@@ -73,6 +74,7 @@ public class ConversationContext {
         this.sessionId = sessionId;
         this.policy = policy;
         this.createdAt = Instant.now();
+        this.lastActiveAt = this.createdAt;
         putNode("session:" + sessionId, "SESSION", "会话 " + sessionId, Map.of("sessionId", sessionId));
     }
 
@@ -86,6 +88,7 @@ public class ConversationContext {
         this.sessionId = s.sessionId();
         this.policy = policy;
         this.createdAt = s.createdAt() != null ? s.createdAt() : Instant.now();
+        this.lastActiveAt = s.lastActiveAt() != null ? s.lastActiveAt() : this.createdAt;
         this.title = s.title() != null ? s.title() : "新会话";
         this.summary = s.summary() != null ? s.summary() : "暂无摘要";
         this.summaryUpdatedAt = s.summaryUpdatedAt();
@@ -113,7 +116,7 @@ public class ConversationContext {
                 summary, summaryUpdatedAt,
                 slotState, currentRoute, currentPlan, evidencePackage,
                 new ArrayList<>(nodes.values()), new ArrayList<>(edges),
-                lastTurnNodeId
+                lastTurnNodeId, lastActiveAt
         );
     }
 
@@ -167,6 +170,8 @@ public class ConversationContext {
     // -------- 以下为原有方法，保持不变 --------
 
     public String sessionId() { return sessionId; }
+    public String summary() { return summary; }
+    public Instant lastActiveAt() { return lastActiveAt; }
     public SlotState slotState() { return slotState; }
 
     public void mergeSlots(SlotState slots) {
@@ -181,7 +186,8 @@ public class ConversationContext {
     public void pendingClarifyQuestion(String pendingClarifyQuestion) { this.pendingClarifyQuestion = pendingClarifyQuestion; }
 
     public void addTurn(String role, String content) {
-        structuredTurns.add(new Turn(role, content == null ? "" : content, Instant.now()));
+        this.lastActiveAt = Instant.now();
+        structuredTurns.add(new Turn(role, content == null ? "" : content, this.lastActiveAt));
         // 滑动窗口：超出上限时淘汰最旧轮次，保证内存有界
         if (structuredTurns.size() > policy.slidingWindowSize()) structuredTurns.removeFirst();
         if ("user".equals(role) && "新会话".equals(title) && content != null && !content.isBlank()) {
@@ -267,13 +273,16 @@ public class ConversationContext {
         if (uncompressed < policy.compressEvery()) return;
         List<Turn> source = structuredTurns.subList(Math.max(0, structuredTurns.size() - 12), structuredTurns.size());
         StringBuilder sb = new StringBuilder();
-        sb.append("已确认信息: ");
+        // 保留旧摘要，追加新内容，不覆盖
+        boolean hasPrev = summary != null && !summary.isBlank() && !summary.equals("暂无摘要");
+        if (hasPrev) {
+            sb.append(summary).append(" | ");
+        }
         sb.append("slots=").append(slotState).append("; ");
         if (currentRoute != null) {
             sb.append("route=").append(currentRoute.domainCode()).append("/").append(currentRoute.subDomainCode()).append("; ");
         }
-        sb.append("最近目标: ").append(currentGoal == null ? "未明确" : currentGoal).append("; ");
-        sb.append("最近对话: ");
+        sb.append("目标=").append(currentGoal == null ? "未明确" : currentGoal).append("; ");
         for (Turn turn : source) {
             sb.append(turn.role()).append(":").append(abbreviate(turn.content(), 24)).append(" | ");
         }

@@ -47,6 +47,16 @@ public class InMemorySessionRepository implements SessionRepository {
                 .toList();
     }
 
+    @Override
+    public List<String> findOldSessionIds(int inactiveDays) {
+        return List.of(); // 内存存储无持久化，无需归档
+    }
+
+    @Override
+    public void deleteSession(String sessionId) {
+        sessions.remove(normalize(sessionId));
+    }
+
     private static String normalize(String sessionId) {
         return sessionId == null || sessionId.isBlank() ? "default" : sessionId;
     }

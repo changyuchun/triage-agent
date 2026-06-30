@@ -80,7 +80,8 @@ public final class AgentModels {
         }
     }
 
-    public record ChatRequest(String sessionId, String message) {
+    /** deviceId：前端 localStorage 持久化的设备 UUID，用于多端并发锁 */
+    public record ChatRequest(String sessionId, String message, String deviceId) {
     }
 
     public record ChatResponse(

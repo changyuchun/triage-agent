@@ -35,6 +35,7 @@ public record ConversationSnapshot(
         EvidencePackage evidencePackage,
         List<MemoryNode> nodes,
         List<MemoryEdge> edges,
-        String lastTurnNodeId
+        String lastTurnNodeId,
+        Instant lastActiveAt
 ) {
 }

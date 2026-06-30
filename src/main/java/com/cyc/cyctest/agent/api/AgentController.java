@@ -14,8 +14,13 @@ import com.cyc.cyctest.agent.memory.MemoryStore.SessionSummary;
 import com.cyc.cyctest.agent.memory.LayeredMemorySnapshot;
 import com.cyc.cyctest.agent.tool.ToolModels.ToolDefinition;
 import com.cyc.cyctest.agent.tool.ToolRegistry;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.time.Duration;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -30,32 +35,64 @@ import java.util.concurrent.CompletableFuture;
 @RequestMapping("/api/agent")
 public class AgentController {
 
+    private static final String ACTIVE_DEVICE_PREFIX = "session:active-device:";
+    private static final Duration DEVICE_LOCK_TTL = Duration.ofMinutes(30);
+
     private final IAgentRuntime agentRuntime;
     private final GraphAgentRuntime graphAgentRuntime;
     private final ToolRegistry toolRegistry;
     private final MemoryStore memoryStore;
     private final LlmClient llmClient;
     private final GuardrailsService guardrailsService;
+    private final StringRedisTemplate redisTemplate;
 
     public AgentController(IAgentRuntime agentRuntime,
                            GraphAgentRuntime graphAgentRuntime,
                            ToolRegistry toolRegistry,
                            MemoryStore memoryStore,
                            LlmClient llmClient,
-                           GuardrailsService guardrailsService) {
+                           GuardrailsService guardrailsService,
+                           StringRedisTemplate redisTemplate) {
         this.agentRuntime = agentRuntime;
         this.graphAgentRuntime = graphAgentRuntime;
         this.toolRegistry = toolRegistry;
         this.memoryStore = memoryStore;
         this.llmClient = llmClient;
         this.guardrailsService = guardrailsService;
+        this.redisTemplate = redisTemplate;
+    }
+
+    /**
+     * 检查并持有设备锁。
+     * - deviceId 为空：跳过检查（兼容旧客户端）
+     * - deviceId 与当前持有者不一致：409 CONFLICT，前端弹"是否接管"
+     * - 持有者一致或首次：续期 TTL，放行
+     */
+    private void checkDeviceLock(String sessionId, String deviceId) {
+        if (deviceId == null || deviceId.isBlank()) return;
+        String key = ACTIVE_DEVICE_PREFIX + sessionId;
+        String current = redisTemplate.opsForValue().get(key);
+        if (current != null && !current.equals(deviceId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "DEVICE_CONFLICT: session is active on another device");
+        }
+        redisTemplate.opsForValue().set(key, deviceId, DEVICE_LOCK_TTL);
     }
 
     @PostMapping("/chat")
     public ChatResponse chat(@RequestBody ChatRequest request) {
+        checkDeviceLock(request.sessionId(), request.deviceId());
         var guard = guardrailsService.check(request.sessionId(), request.message());
         if (guard.blocked()) throw new IllegalArgumentException(guard.reason());
         return agentRuntime.run(request.sessionId(), guard.sanitizedInput());
+    }
+
+    /** 设备接管：强制覆盖 active-device（用户确认接管后调用） */
+    @PostMapping("/chat/takeover")
+    public void takeover(@RequestBody ChatRequest request) {
+        if (request.deviceId() == null || request.deviceId().isBlank()) return;
+        redisTemplate.opsForValue().set(
+                ACTIVE_DEVICE_PREFIX + request.sessionId(), request.deviceId(), DEVICE_LOCK_TTL);
     }
 
     @GetMapping("/chat")
@@ -113,7 +150,9 @@ public class AgentController {
      */
     @GetMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStream(@RequestParam(defaultValue = "default") String sessionId,
-                                 @RequestParam String message) {
+                                 @RequestParam String message,
+                                 @RequestParam(required = false) String deviceId) {
+        checkDeviceLock(sessionId, deviceId);
         var guard = guardrailsService.check(sessionId, message);
         SseEmitter emitter = new SseEmitter(60_000L);
         if (guard.blocked()) {
@@ -177,7 +216,9 @@ public class AgentController {
     @GetMapping(value = "/chat/stream/v2", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStreamV2(
             @RequestParam(defaultValue = "default") String sessionId,
-            @RequestParam String message) {
+            @RequestParam String message,
+            @RequestParam(required = false) String deviceId) {
+        checkDeviceLock(sessionId, deviceId);
         var guard = guardrailsService.check(sessionId, message);
         SseEmitter emitter = new SseEmitter(120_000L);
         if (guard.blocked()) {

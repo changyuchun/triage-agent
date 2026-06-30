@@ -10,6 +10,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -67,7 +68,7 @@ public class RedisSessionRepository implements SessionRepository {
             String redisKey = SESSION_KEY_PREFIX + context.sessionId();
             redisTemplate.opsForValue().set(redisKey, json, Duration.ofDays(ttlDays));
             redisTemplate.opsForZSet().add(SESSIONS_ZSET_KEY, context.sessionId(),
-                    context.createdAt().toEpochMilli());
+                    context.lastActiveAt().toEpochMilli());
             localCache.put(context.sessionId(), context);
         } catch (Exception e) {
             log.warn("会话持久化到 Redis 失败，会话 {}，原因: {}", context.sessionId(), e.getMessage());
@@ -93,6 +94,20 @@ public class RedisSessionRepository implements SessionRepository {
                             s.sessionId(), s.title(), s.createdAt(), s.clarifyCount(), s.pendingClarifyQuestion()))
                     .toList();
         }
+    }
+
+    @Override
+    public List<String> findOldSessionIds(int inactiveDays) {
+        long threshold = Instant.now().minusSeconds((long) inactiveDays * 86400).toEpochMilli();
+        Set<String> ids = redisTemplate.opsForZSet().rangeByScore(SESSIONS_ZSET_KEY, 0, threshold);
+        return ids == null ? List.of() : List.copyOf(ids);
+    }
+
+    @Override
+    public void deleteSession(String sessionId) {
+        redisTemplate.delete(SESSION_KEY_PREFIX + sessionId);
+        redisTemplate.opsForZSet().remove(SESSIONS_ZSET_KEY, sessionId);
+        localCache.remove(sessionId);
     }
 
     private ConversationContext loadFromRedis(String sessionId) {
