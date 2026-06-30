@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class ClarifyService {
@@ -41,10 +42,12 @@ public class ClarifyService {
         if (!llmClient.available()) {
             return ClarifyLlmResult.fallback(userText, slots);
         }
-        String system = "你是智能答疑 Agent 的对话挖掘模块，只输出 JSON，不直接回答用户。";
+        String system = """
+                你是智能答疑 Agent 的对话挖掘模块，只输出 JSON，不直接回答用户。
+                【强制约束】problemType 必须且只能是以下 5 个值之一，禁止输出任何其他字符串：
+                KNOWLEDGE_EXPLANATION | STATUS_QUERY | DIAGNOSIS | CONFIG_QUERY | UNKNOWN""";
         String user = """
-                判断用户问题类型、用户目标、是否是具体对象查询、缺失字段。
-                problemType 只能是 KNOWLEDGE_EXPLANATION, STATUS_QUERY, DIAGNOSIS, CONFIG_QUERY, UNKNOWN。
+                根据当前输入和历史对话，判断用户问题类型、用户目标、是否是具体对象查询、缺失字段。
 
                 当前输入:
                 %s
@@ -55,15 +58,44 @@ public class ClarifyService {
                 最近对话:
                 %s
 
-                输出 JSON:
+                输出 JSON（problemType 只允许5个值，见 system 说明）:
                 {"problemType":"DIAGNOSIS","userGoal":"...","specificObjectQuery":true,"missingFields":["env"],"confidence":0.8,"reason":"..."}
                 """.formatted(userText, slots, context.recentTurns());
         try {
-            ClarifyLlmResult result = jsonSupport.readJsonObject(llmClient.complete(system, user), ClarifyLlmResult.class);
-            if (result.confidence() < 0 || result.confidence() > 1 || result.problemType() == null) {
-                return ClarifyLlmResult.fallback(userText, slots);
+            String raw = llmClient.complete(system, user);
+            try {
+                ClarifyLlmResult result = jsonSupport.readJsonObject(raw, ClarifyLlmResult.class);
+                if (result.confidence() < 0 || result.confidence() > 1 || result.problemType() == null) {
+                    return ClarifyLlmResult.fallback(userText, slots);
+                }
+                return result;
+            } catch (Exception e) {
+                // LLM 输出了非法 problemType（如 "PAYMENTOrder"）：用 Map 宽容解析，保留 userGoal/missingFields
+                return lenientParse(raw, userText, slots);
             }
-            return result;
+        } catch (Exception e) {
+            return ClarifyLlmResult.fallback(userText, slots);
+        }
+    }
+
+    private static final Set<String> VALID_PROBLEM_TYPES = Set.of(
+            "KNOWLEDGE_EXPLANATION", "STATUS_QUERY", "DIAGNOSIS", "CONFIG_QUERY", "UNKNOWN");
+
+    @SuppressWarnings("unchecked")
+    private ClarifyLlmResult lenientParse(String raw, String userText, SlotState slots) {
+        try {
+            Map<String, Object> map = jsonSupport.readJsonObject(raw, Map.class);
+            String rawType = String.valueOf(map.getOrDefault("problemType", "UNKNOWN")).toUpperCase();
+            ProblemType problemType = VALID_PROBLEM_TYPES.contains(rawType)
+                    ? ProblemType.valueOf(rawType)
+                    : ClarifyLlmResult.fallback(userText, slots).problemType();
+            String userGoal = (String) map.getOrDefault("userGoal", userText);
+            boolean specificObjectQuery = Boolean.TRUE.equals(map.get("specificObjectQuery"));
+            Object mf = map.get("missingFields");
+            List<String> missingFields = mf instanceof List<?> l
+                    ? l.stream().map(Object::toString).toList() : List.of();
+            double confidence = map.get("confidence") instanceof Number n ? n.doubleValue() : 0.6;
+            return new ClarifyLlmResult(problemType, userGoal, specificObjectQuery, missingFields, confidence, "lenient-parse");
         } catch (Exception e) {
             return ClarifyLlmResult.fallback(userText, slots);
         }

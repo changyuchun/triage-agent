@@ -46,8 +46,10 @@ public class TaskPlanner {
      * （stepId=toolCode、dependsOn、condition、args 均由 LLM 从 SOP 中推断）。
      */
     private ExecutionPlan llmPlan(String userText, SlotState slots, RouteResult route) {
-        List<ToolDefinition> toolDefs = skillRegistry.toolDefinitionsFor(
-                route.domainCode(), route.subDomainCode());
+        boolean needsTools = !"knowledge_only".equals(route.handleMode());
+        List<ToolDefinition> toolDefs = needsTools
+                ? skillRegistry.toolDefinitionsFor(route.domainCode(), route.subDomainCode())
+                : List.of();
         String sop = skillRegistry.sopFor(route.domainCode(), route.subDomainCode());
 
         String system = "你是 Agent 任务规划模块。你只输出 JSON，不能解释。";
