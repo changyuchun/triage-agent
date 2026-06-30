@@ -121,6 +121,8 @@ public class AgentRuntime implements IAgentRuntime {
         }
         if (ctx.finalAnswer() != null) {
             memory.addTurn("assistant", ctx.finalAnswer());
+        } else if (ctx.state() == AgentState.WAITING_USER_INPUT && ctx.clarifyQuestion() != null) {
+            memory.addTurn("assistant", ctx.clarifyQuestion());
         }
 
         // L3 记忆压缩：使用 LLM 将旧轮次压缩为摘要
@@ -217,6 +219,7 @@ public class AgentRuntime implements IAgentRuntime {
 
         if (guard >= 20) ctx = ctx.withState(AgentState.FAILED, "runtime guard exceeded");
         if (ctx.finalAnswer() != null) memory.addTurn("assistant", ctx.finalAnswer());
+        else if (ctx.state() == AgentState.WAITING_USER_INPUT && ctx.clarifyQuestion() != null) memory.addTurn("assistant", ctx.clarifyQuestion());
         memoryCompressionService.compressIfNeeded(memory);
         if (ctx.state() == AgentState.DONE) episodicMemoryService.recordEpisode(memory.sessionId(), ctx);
         memoryStore.save(memory);
@@ -317,6 +320,7 @@ public class AgentRuntime implements IAgentRuntime {
             } else {
                 // WAITING / FAILED / DONE（无 synthesize，如澄清中断）
                 if (ctx.finalAnswer() != null) memory.addTurn("assistant", ctx.finalAnswer());
+                else if (ctx.state() == AgentState.WAITING_USER_INPUT && ctx.clarifyQuestion() != null) memory.addTurn("assistant", ctx.clarifyQuestion());
                 memoryCompressionService.compressIfNeeded(memory);
                 if (ctx.state() == AgentState.DONE) {
                     episodicMemoryService.recordEpisode(memory.sessionId(), ctx);

@@ -12,9 +12,9 @@ import java.util.regex.Pattern;
 
 @Component
 public class PaymentSlotExtractor implements SlotExtractor {
-    private static final Pattern PAY_ORDER = Pattern.compile("\\b(PAY|P)[-_]?[0-9A-Za-z]{8,32}\\b", Pattern.CASE_INSENSITIVE);
-    private static final Pattern ORDER = Pattern.compile("\\b(ORD|ORDER|T)[-_]?[0-9A-Za-z]{8,32}\\b", Pattern.CASE_INSENSITIVE);
-    private static final Pattern CHECKOUT = Pattern.compile("\\b(CK|CHECKOUT)[-_]?[0-9A-Za-z]{6,32}\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PAY_ORDER = Pattern.compile("\\b(PAY|P)[-_]?[0-9A-Za-z]{4,32}\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern ORDER = Pattern.compile("\\b(ORD|ORDER|T)[-_]?[0-9A-Za-z]{4,32}\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern CHECKOUT = Pattern.compile("\\b(CK|CHECKOUT)[-_]?[0-9A-Za-z]{4,32}\\b", Pattern.CASE_INSENSITIVE);
     private static final Pattern ERROR_CODE = Pattern.compile("\\b[A-Z][A-Z0-9_]{2,40}\\b");
 
     @Override
